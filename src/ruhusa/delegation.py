@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .models import AuthorizationRequest, Scope
 
@@ -15,15 +15,15 @@ class DelegationValidation:
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def validate_delegation_chain(
     request: AuthorizationRequest,
     now: datetime | None = None,
 ) -> DelegationValidation:
-    now = _as_utc(now or datetime.now(timezone.utc))
+    now = _as_utc(now or datetime.now(UTC))
     chain = request.delegation_chain
 
     if not chain:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .audit import InMemoryAuditLog
 from .delegation import validate_delegation_chain
@@ -36,7 +36,7 @@ class Ruhusa:
         *,
         now: datetime | None = None,
     ) -> AuthorizationDecision:
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
 
         if request.task.is_expired(now):
             return self._record(
