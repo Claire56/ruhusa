@@ -18,6 +18,7 @@ class Ruhusa:
     - delegation chain must be identity-continuous
     - delegated scope may narrow, never expand
     - action/resource/arguments must fit effective delegated scope
+    - policy evaluation failures deny the action
     - every decision is audited
     """
 
@@ -38,7 +39,10 @@ class Ruhusa:
         now = now or datetime.now(timezone.utc)
 
         if request.task.is_expired(now):
-            return self._record(request, AuthorizationDecision(DecisionEffect.DENY, "task expired"))
+            return self._record(
+                request,
+                AuthorizationDecision(DecisionEffect.DENY, "task expired"),
+            )
 
         delegation = validate_delegation_chain(request, now)
         if not delegation.valid:
@@ -52,24 +56,50 @@ class Ruhusa:
             if not scope.allows_action(request.action):
                 return self._record(
                     request,
-                    AuthorizationDecision(DecisionEffect.DENY, "action outside delegated scope"),
+                    AuthorizationDecision(
+                        DecisionEffect.DENY,
+                        "action outside delegated scope",
+                    ),
                 )
+
             if not scope.allows_resource(request.resource):
                 return self._record(
                     request,
-                    AuthorizationDecision(DecisionEffect.DENY, "resource outside delegated scope"),
+                    AuthorizationDecision(
+                        DecisionEffect.DENY,
+                        "resource outside delegated scope",
+                    ),
                 )
+
             if not scope.allows_arguments(request.arguments):
                 return self._record(
                     request,
-                    AuthorizationDecision(DecisionEffect.DENY, "arguments exceed delegated scope"),
+                    AuthorizationDecision(
+                        DecisionEffect.DENY,
+                        "arguments exceed delegated scope",
+                    ),
                 )
 
-        rule = self.policy_store.evaluate(request)
+        try:
+            rule = self.policy_store.evaluate(request)
+        except Exception:
+            # Policy code must never fail open. Avoid returning exception
+            # details because policy backends may contain sensitive context.
+            return self._record(
+                request,
+                AuthorizationDecision(
+                    DecisionEffect.DENY,
+                    "policy evaluation failed; default deny",
+                ),
+            )
+
         if rule is None:
             return self._record(
                 request,
-                AuthorizationDecision(DecisionEffect.DENY, "no policy matched; default deny"),
+                AuthorizationDecision(
+                    DecisionEffect.DENY,
+                    "no policy matched; default deny",
+                ),
             )
 
         decision = AuthorizationDecision(
