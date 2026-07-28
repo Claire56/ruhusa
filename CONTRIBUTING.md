@@ -14,10 +14,10 @@ cd ruhusa
 uv sync
 ```
 
-Run the test suite:
+Run formatting:
 
 ```bash
-uv run pytest -q
+uv run ruff format .
 ```
 
 Run linting:
@@ -26,7 +26,19 @@ Run linting:
 uv run ruff check .
 ```
 
-Run the example application:
+Automatically fix safe lint issues:
+
+```bash
+uv run ruff check . --fix
+```
+
+Run the test suite:
+
+```bash
+uv run pytest -q
+```
+
+Run the example:
 
 ```bash
 uv run python examples/refund_demo.py
@@ -55,15 +67,17 @@ Changes to the authorization core should preserve these invariants:
 4. **Mediate every protected action.** Security-sensitive tool calls must pass through the authorization boundary before execution.
 5. **Audit authorization decisions.** Record sufficient context to reconstruct who requested an action, what was requested, which authority applied, and why the decision was made.
 6. **Protect authorization context.** Agents must not be able to modify trusted identity, delegation, approval, or policy state through prompt-generated data.
-7. **Test security behavior.** Every security-relevant change must include tests covering both allowed and denied cases.
+7. **Validate delegation time bounds.** Grants must be active at evaluation time and must have a valid issuance/expiration window.
+8. **Test security behavior.** Every security-relevant change must include tests covering both allowed and denied cases.
 
 ## Pull Requests
 
 Before submitting a pull request, run:
 
 ```bash
-uv run pytest -q
+uv run ruff format .
 uv run ruff check .
+uv run pytest -q
 uv build
 ```
 
