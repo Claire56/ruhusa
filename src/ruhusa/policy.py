@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Callable, Iterable
 
 from .models import AuthorizationRequest, DecisionEffect
-
 
 Condition = Callable[[AuthorizationRequest], bool]
 
@@ -22,15 +21,9 @@ class PolicyRule:
     obligations: tuple[str, ...] = ()
 
     def matches(self, request: AuthorizationRequest) -> bool:
-        if (
-            self.principal_ids
-            and request.principal.principal_id not in self.principal_ids
-        ):
+        if self.principal_ids and request.principal.principal_id not in self.principal_ids:
             return False
-        if (
-            self.principal_types
-            and request.principal.principal_type not in self.principal_types
-        ):
+        if self.principal_types and request.principal.principal_type not in self.principal_types:
             return False
         if request.action not in self.actions:
             return False

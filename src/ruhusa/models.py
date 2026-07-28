@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any
 
 
 class DecisionEffect(str, Enum):
@@ -28,10 +29,10 @@ class TaskContext:
     attributes: Mapping[str, Any] = field(default_factory=dict)
 
     def is_expired(self, now: datetime | None = None) -> bool:
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         expiry = self.expires_at
         if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
+            expiry = expiry.replace(tzinfo=UTC)
         return now >= expiry
 
 
@@ -60,7 +61,7 @@ class Scope:
                 return False
         return True
 
-    def is_subset_of(self, parent: "Scope") -> bool:
+    def is_subset_of(self, parent: Scope) -> bool:
         if not self.actions.issubset(parent.actions):
             return False
 
@@ -102,10 +103,10 @@ class DelegationGrant:
     expires_at: datetime
 
     def is_expired(self, now: datetime | None = None) -> bool:
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         expiry = self.expires_at
         if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
+            expiry = expiry.replace(tzinfo=UTC)
         return now >= expiry
 
 

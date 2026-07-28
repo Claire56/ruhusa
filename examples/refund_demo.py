@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from ruhusa import (
     AuthorizationRequest,
@@ -12,8 +12,7 @@ from ruhusa import (
     TaskContext,
 )
 
-
-now = datetime.now(timezone.utc)
+now = datetime.now(UTC)
 
 policies = StaticPolicyStore(
     [

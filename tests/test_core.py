@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from ruhusa import (
     AuthorizationRequest,
@@ -12,8 +12,7 @@ from ruhusa import (
     TaskContext,
 )
 
-
-NOW = datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 
 
 def task() -> TaskContext:

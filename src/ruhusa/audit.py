@@ -3,12 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from typing import Any, Mapping
+from datetime import UTC, datetime
+from typing import Any
 
 from .models import AuthorizationDecision, AuthorizationRequest
-
 
 SENSITIVE_KEYS = {"password", "token", "secret", "api_key", "authorization"}
 
@@ -52,7 +52,7 @@ class InMemoryAuditLog:
         decision: AuthorizationDecision,
     ) -> str:
         audit_id = str(uuid.uuid4())
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(UTC).isoformat()
         previous_hash = self.events[-1].event_hash if self.events else "GENESIS"
 
         payload = {
@@ -68,9 +68,7 @@ class InMemoryAuditLog:
             "policy_id": decision.policy_id,
             "previous_hash": previous_hash,
         }
-        serialized = json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), default=str
-        )
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         event_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
         event = AuditEvent(event_hash=event_hash, **payload)
@@ -84,9 +82,7 @@ class InMemoryAuditLog:
             event_hash = payload.pop("event_hash")
             if payload["previous_hash"] != previous_hash:
                 return False
-            serialized = json.dumps(
-                payload, sort_keys=True, separators=(",", ":"), default=str
-            )
+            serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
             calculated = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
             if calculated != event_hash:
                 return False
