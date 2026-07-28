@@ -68,7 +68,9 @@ class InMemoryAuditLog:
             "policy_id": decision.policy_id,
             "previous_hash": previous_hash,
         }
-        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        serialized = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), default=str
+        )
         event_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
         event = AuditEvent(event_hash=event_hash, **payload)
@@ -82,7 +84,9 @@ class InMemoryAuditLog:
             event_hash = payload.pop("event_hash")
             if payload["previous_hash"] != previous_hash:
                 return False
-            serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+            serialized = json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), default=str
+            )
             calculated = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
             if calculated != event_hash:
                 return False
