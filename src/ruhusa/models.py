@@ -70,7 +70,10 @@ class Scope:
                 # Child would become unrestricted while the parent is restricted.
                 return False
             for child_prefix in self.resource_prefixes:
-                if not any(child_prefix.startswith(parent_prefix) for parent_prefix in parent.resource_prefixes):
+                if not any(
+                    child_prefix.startswith(parent_prefix)
+                    for parent_prefix in parent.resource_prefixes
+                ):
                     return False
         elif self.resource_prefixes:
             # Parent is unrestricted, so any child restriction is narrower and valid.
