@@ -1,0 +1,66 @@
+[project]
+name = "ruhusa"
+version = "0.1.0"
+description = "Continuous, least-privilege authorization for multi-agent AI systems."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+
+authors = [
+    { name = "Claire Muwanguzi" }
+]
+
+keywords = [
+    "ai-agents",
+    "authorization",
+    "delegation",
+    "least-privilege",
+    "multi-agent",
+    "security",
+]
+
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.16.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Claire56/ruhusa"
+Repository = "https://github.com/Claire56/ruhusa"
+Issues = "https://github.com/Claire56/ruhusa/issues"
+
+[build-system]
+requires = ["uv_build>=0.11.32,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "I",
+]
