@@ -51,7 +51,14 @@ def policy_store() -> StaticPolicyStore:
     )
 
 
-def grant(grantor: str, grantee: str, amount: float = 1000) -> DelegationGrant:
+def grant(
+    grantor: str,
+    grantee: str,
+    amount: float = 1000,
+    *,
+    issued_at: datetime = NOW,
+    expires_at: datetime | None = None,
+) -> DelegationGrant:
     return DelegationGrant(
         grant_id=f"{grantor}-{grantee}",
         grantor_id=grantor,
@@ -61,12 +68,15 @@ def grant(grantor: str, grantee: str, amount: float = 1000) -> DelegationGrant:
             resource_prefixes=("customer:123",),
             max_numeric_arguments={"amount": amount},
         ),
-        issued_at=NOW,
-        expires_at=NOW + timedelta(minutes=20),
+        issued_at=issued_at,
+        expires_at=expires_at or NOW + timedelta(minutes=20),
     )
 
 
-def request(amount: float, chain: tuple[DelegationGrant, ...]) -> AuthorizationRequest:
+def request(
+    amount: float,
+    chain: tuple[DelegationGrant, ...],
+) -> AuthorizationRequest:
     return AuthorizationRequest(
         principal=Principal("billing-agent"),
         action="issue_refund",
@@ -167,3 +177,53 @@ def test_wrong_principal_does_not_match_policy() -> None:
     decision = gate.authorize(req, now=NOW)
     assert decision.effect == DecisionEffect.DENY
     assert "default deny" in decision.reason
+
+
+def test_policy_exception_fails_closed() -> None:
+    chain = (grant("user-1", "billing-agent"),)
+    gate = Ruhusa(policy_store=policy_store())
+
+    malformed_request = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={},
+        task=task(),
+        delegation_chain=chain,
+    )
+
+    decision = gate.authorize(malformed_request, now=NOW)
+
+    assert decision.effect == DecisionEffect.DENY
+    assert decision.reason == "policy evaluation failed; default deny"
+    assert decision.audit_id is not None
+
+
+def test_future_dated_delegation_grant_is_denied() -> None:
+    future_grant = grant(
+        "user-1",
+        "billing-agent",
+        issued_at=NOW + timedelta(minutes=5),
+        expires_at=NOW + timedelta(minutes=20),
+    )
+
+    gate = Ruhusa(policy_store=policy_store())
+    decision = gate.authorize(request(250, (future_grant,)), now=NOW)
+
+    assert decision.effect == DecisionEffect.DENY
+    assert "not active yet" in decision.reason
+
+
+def test_invalid_grant_validity_window_is_denied() -> None:
+    invalid_grant = grant(
+        "user-1",
+        "billing-agent",
+        issued_at=NOW,
+        expires_at=NOW,
+    )
+
+    gate = Ruhusa(policy_store=policy_store())
+    decision = gate.authorize(request(250, (invalid_grant,)), now=NOW)
+
+    assert decision.effect == DecisionEffect.DENY
+    assert "invalid validity window" in decision.reason
