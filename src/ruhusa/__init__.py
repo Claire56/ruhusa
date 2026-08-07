@@ -10,6 +10,7 @@ from .models import (
     TaskContext,
 )
 from .policy import PolicyRule, StaticPolicyStore
+from ruhusa import InMemoryRevocationStore, RevocationRecord
 
 __all__ = [
     "AuditEvent",
