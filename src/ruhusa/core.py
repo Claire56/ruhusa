@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 from .audit import InMemoryAuditLog
 from .delegation import validate_delegation_chain
 from .models import AuthorizationDecision, AuthorizationRequest, DecisionEffect
-from .policy import StaticPolicyStore
+from .policy import StaticPolicyStore 
+from .revocation import InMemoryRevocationStore, RevocationRecord
 
 
 class Ruhusa:
@@ -30,6 +31,25 @@ class Ruhusa:
         self.policy_store = policy_store or StaticPolicyStore()
         self.audit_log = audit_log or InMemoryAuditLog()
 
+    def revoke_grant(
+        self,
+        grant_id: str,
+        *,
+        reason: str,
+        revoked_at: datetime | None = None,
+    ) -> RevocationRecord:
+        """Revoke a delegation grant.
+
+        Revocation is stored separately from the immutable grant. Any later
+        authorization request that relies on this grant will be denied once
+        the revocation is effective.
+        """
+        return self.revocation_store.revoke(
+            grant_id,
+            reason=reason,
+            revoked_at=revoked_at,
+        )
+    
     def authorize(
         self,
         request: AuthorizationRequest,
