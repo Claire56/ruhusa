@@ -53,26 +53,23 @@ class InMemoryRevocationStore:
     ) -> RevocationRecord:
         """Revoke a grant.
 
-        Revocation is idempotent. If the grant has already been revoked,
-        the original revocation record is returned rather than overwritten.
+        Revocation is monotonic toward earlier enforcement. A repeated
+        revocation at the same or a later effective time preserves the
+        existing record. An earlier revocation replaces a previously
+        scheduled one so emergency revocation cannot be delayed.
         """
-        if not grant_id.strip():
-            raise ValueError("grant_id must not be empty")
-
-        if not reason.strip():
-            raise ValueError("reason must not be empty")
-
-        existing = self._records.get(grant_id)
-        if existing is not None:
-            return existing
-
-        record = RevocationRecord(
+        candidate = RevocationRecord(
             grant_id=grant_id,
             revoked_at=revoked_at or datetime.now(UTC),
             reason=reason,
         )
-        self._records[grant_id] = record
-        return record
+
+        existing = self._records.get(grant_id)
+        if existing is not None and existing.revoked_at <= candidate.revoked_at:
+            return existing
+
+        self._records[grant_id] = candidate
+        return candidate
 
     def is_revoked(
         self,
