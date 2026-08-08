@@ -190,3 +190,37 @@ def test_revocation_store_failure_fails_closed() -> None:
     assert decision.effect == DecisionEffect.DENY
     assert decision.reason == "revocation status unavailable; default deny"
     assert decision.audit_id is not None
+
+
+def test_earlier_revocation_supersedes_later_scheduled_revocation() -> None:
+    workflow_grant = grant()
+    gate = Ruhusa(policy_store=policy_store())
+
+    scheduled = gate.revoke_grant(
+        workflow_grant.grant_id,
+        reason="scheduled revocation",
+        revoked_at=NOW + timedelta(minutes=10),
+    )
+
+    before_emergency = gate.authorize(
+        request(workflow_grant),
+        now=NOW + timedelta(minutes=1),
+    )
+
+    emergency = gate.revoke_grant(
+        workflow_grant.grant_id,
+        reason="emergency revocation",
+        revoked_at=NOW + timedelta(minutes=2),
+    )
+
+    after_emergency = gate.authorize(
+        request(workflow_grant),
+        now=NOW + timedelta(minutes=3),
+    )
+
+    assert scheduled.revoked_at == NOW + timedelta(minutes=10)
+    assert before_emergency.effect == DecisionEffect.ALLOW
+    assert emergency.revoked_at == NOW + timedelta(minutes=2)
+    assert emergency.reason == "emergency revocation"
+    assert after_emergency.effect == DecisionEffect.DENY
+    assert "revoked" in after_emergency.reason
