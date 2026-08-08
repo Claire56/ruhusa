@@ -6,30 +6,34 @@ from datetime import UTC, datetime
 from .audit import InMemoryAuditLog
 from .delegation import validate_delegation_chain
 from .models import AuthorizationDecision, AuthorizationRequest, DecisionEffect
-from .policy import StaticPolicyStore 
+from .policy import StaticPolicyStore
 from .revocation import InMemoryRevocationStore, RevocationRecord
 
 
 class Ruhusa:
     """Deterministic authorization boundary for agent actions.
 
-    Security invariants in v0.1:
+    Security invariants in v0.2:
     - deny by default
     - task must be active
     - delegation chain must be identity-continuous
     - delegated scope may narrow, never expand
+    - revoked authority must not authorize subsequent actions
     - action/resource/arguments must fit effective delegated scope
     - policy evaluation failures deny the action
-    - every decision is audited
+    - revocation-check failures deny the action
+    - every authorization decision is audited
     """
 
     def __init__(
         self,
         policy_store: StaticPolicyStore | None = None,
         audit_log: InMemoryAuditLog | None = None,
+        revocation_store: InMemoryRevocationStore | None = None,
     ) -> None:
         self.policy_store = policy_store or StaticPolicyStore()
         self.audit_log = audit_log or InMemoryAuditLog()
+        self.revocation_store = revocation_store or InMemoryRevocationStore()
 
     def revoke_grant(
         self,
@@ -38,18 +42,13 @@ class Ruhusa:
         reason: str,
         revoked_at: datetime | None = None,
     ) -> RevocationRecord:
-        """Revoke a delegation grant.
-
-        Revocation is stored separately from the immutable grant. Any later
-        authorization request that relies on this grant will be denied once
-        the revocation is effective.
-        """
+        """Revoke a delegation grant."""
         return self.revocation_store.revoke(
             grant_id,
             reason=reason,
             revoked_at=revoked_at,
         )
-    
+
     def authorize(
         self,
         request: AuthorizationRequest,
@@ -69,6 +68,25 @@ class Ruhusa:
             return self._record(
                 request,
                 AuthorizationDecision(DecisionEffect.DENY, delegation.reason),
+            )
+
+        try:
+            for grant in request.delegation_chain:
+                if self.revocation_store.is_revoked(grant.grant_id, at=now):
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            f"delegation grant {grant.grant_id} is revoked",
+                        ),
+                    )
+        except Exception:
+            return self._record(
+                request,
+                AuthorizationDecision(
+                    DecisionEffect.DENY,
+                    "revocation status unavailable; default deny",
+                ),
             )
 
         scope = delegation.effective_scope
@@ -103,8 +121,6 @@ class Ruhusa:
         try:
             rule = self.policy_store.evaluate(request)
         except Exception:
-            # Policy code must never fail open. Avoid returning exception
-            # details because policy backends may contain sensitive context.
             return self._record(
                 request,
                 AuthorizationDecision(
