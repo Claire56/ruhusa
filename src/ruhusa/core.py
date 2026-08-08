@@ -33,7 +33,9 @@ class Ruhusa:
     ) -> None:
         self.policy_store = policy_store or StaticPolicyStore()
         self.audit_log = audit_log or InMemoryAuditLog()
-        self.revocation_store = revocation_store or InMemoryRevocationStore()
+        self.revocation_store = (
+            revocation_store if revocation_store is not None else InMemoryRevocationStore()
+        )
 
     def revoke_grant(
         self,
