@@ -10,6 +10,7 @@ from .models import (
     TaskContext,
 )
 from .policy import PolicyRule, StaticPolicyStore
+from .revocation import InMemoryRevocationStore, RevocationRecord
 
 __all__ = [
     "AuditEvent",
@@ -18,8 +19,10 @@ __all__ = [
     "DecisionEffect",
     "DelegationGrant",
     "InMemoryAuditLog",
+    "InMemoryRevocationStore",
     "PolicyRule",
     "Principal",
+    "RevocationRecord",
     "Ruhusa",
     "Scope",
     "StaticPolicyStore",
