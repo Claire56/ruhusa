@@ -1,0 +1,412 @@
+"""
+tests/test_replanning_attacks.py
+
+v0.4 attack scenarios: replanning and delegation-bypass experiments.
+
+Each test documents the attack, the expected outcome under the current
+authorization model, and (where relevant) whether a gap exists.
+
+Tests marked BLOCKS confirm Ruhusa already prevents the attack.
+Tests marked GAP confirm the attack currently succeeds — these drive
+new v0.4 controls.
+"""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from ruhusa import (
+    AuthorizationRequest,
+    DecisionEffect,
+    DelegationGrant,
+    PolicyRule,
+    Principal,
+    Ruhusa,
+    Scope,
+    StaticPolicyStore,
+    TaskContext,
+)
+
+NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
+
+# ---------------------------------------------------------------------------
+# Shared fixtures
+# ---------------------------------------------------------------------------
+
+REFUND_SCOPE = Scope(
+    actions=frozenset({"issue_refund"}),
+    resource_prefixes=("customer:123",),
+    max_numeric_arguments={"amount": 500},
+)
+
+WIDE_SCOPE = Scope(
+    actions=frozenset({"issue_refund"}),
+    resource_prefixes=("customer:123",),
+    max_numeric_arguments={"amount": 2000},
+)
+
+
+def make_task(task_id: str, initiated_by: str = "user-1") -> TaskContext:
+    return TaskContext(
+        task_id=task_id,
+        initiated_by=initiated_by,
+        purpose="billing support",
+        expires_at=NOW + timedelta(hours=1),
+    )
+
+
+def make_grant(
+    grant_id: str,
+    grantor_id: str,
+    grantee_id: str,
+    task_id: str,
+    scope: Scope = REFUND_SCOPE,
+) -> DelegationGrant:
+    return DelegationGrant(
+        grant_id=grant_id,
+        grantor_id=grantor_id,
+        grantee_id=grantee_id,
+        task_id=task_id,
+        scope=scope,
+        issued_at=NOW - timedelta(minutes=5),
+        expires_at=NOW + timedelta(hours=1),
+    )
+
+
+def make_request(
+    principal_id: str,
+    action: str,
+    resource: str,
+    arguments: dict,
+    task: TaskContext,
+    chain: tuple[DelegationGrant, ...] = (),
+) -> AuthorizationRequest:
+    return AuthorizationRequest(
+        principal=Principal(principal_id),
+        action=action,
+        resource=resource,
+        arguments=arguments,
+        task=task,
+        delegation_chain=chain,
+    )
+
+
+def policy_store() -> StaticPolicyStore:
+    return StaticPolicyStore(
+        [
+            PolicyRule(
+                policy_id="allow-small-refund",
+                effect=DecisionEffect.ALLOW,
+                actions=frozenset({"issue_refund"}),
+                principal_ids=frozenset({"billing-agent"}),
+                resource_prefixes=("customer:123",),
+                condition=lambda req: req.arguments["amount"] <= 500,
+                reason="small refund allowed",
+            ),
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Attack 1: Denied agent delegates to another agent and retries
+#
+# Scenario: billing-agent is denied (no delegation chain). It then delegates
+# to sub-agent, which presents a chain originating from billing-agent rather
+# than from the task initiator (user-1). The chain origin check should catch
+# this because chain[0].grantor_id must equal task.initiated_by.
+#
+# Expected: BLOCKS — chain does not originate from task initiator.
+# ---------------------------------------------------------------------------
+
+def test_denied_agent_cannot_delegate_to_bypass_denial() -> None:
+    """
+    BLOCKS: An agent that was denied cannot create a valid delegation chain
+    rooted at itself. The first grant in any chain must originate from the
+    task initiator, not from a previously-denied agent.
+    """
+    task = make_task("task-refund-001")
+
+    # billing-agent tries to delegate to sub-agent, rooting the chain in itself
+    forged_grant = make_grant(
+        grant_id="forged-grant",
+        grantor_id="billing-agent",   # not the task initiator
+        grantee_id="sub-agent",
+        task_id="task-refund-001",
+    )
+
+    req = make_request(
+        principal_id="sub-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        chain=(forged_grant,),
+    )
+
+    decision = Ruhusa(policy_store=policy_store()).authorize(req, now=NOW)
+
+    assert decision.effect == DecisionEffect.DENY
+    assert "does not originate from task initiator" in decision.reason
+
+
+# ---------------------------------------------------------------------------
+# Attack 2: Scope escalation through a child grant
+#
+# Scenario: user-1 grants billing-agent a scope capped at $500.
+# billing-agent re-delegates to sub-agent with a scope capped at $2000,
+# attempting to widen authority through a child grant.
+#
+# Expected: BLOCKS — scope attenuation check prevents widening.
+# ---------------------------------------------------------------------------
+
+def test_child_grant_cannot_widen_scope() -> None:
+    """
+    BLOCKS: A child delegation grant cannot exceed the scope of its parent.
+    Attempting to raise the numeric cap ($500 → $2000) must be denied.
+    """
+    task = make_task("task-escalation-001")
+
+    parent_grant = make_grant(
+        grant_id="parent-grant",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id="task-escalation-001",
+        scope=REFUND_SCOPE,   # capped at $500
+    )
+
+    escalated_grant = make_grant(
+        grant_id="escalated-grant",
+        grantor_id="billing-agent",
+        grantee_id="sub-agent",
+        task_id="task-escalation-001",
+        scope=WIDE_SCOPE,   # attempts to widen to $2000
+    )
+
+    req = make_request(
+        principal_id="sub-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 1500},
+        task=task,
+        chain=(parent_grant, escalated_grant),
+    )
+
+    decision = Ruhusa(policy_store=policy_store()).authorize(req, now=NOW)
+
+    assert decision.effect == DecisionEffect.DENY
+    assert "exceeds parent scope" in decision.reason
+
+
+# ---------------------------------------------------------------------------
+# Attack 3: Revoked authority reused through a fresh delegation chain
+#
+# Scenario: user-1 grants billing-agent authority, then revokes it.
+# billing-agent responds by requesting a new grant — but the revocation
+# is on the grant_id, not on any re-issued grant. A genuinely fresh grant
+# (different grant_id, same scope) from the task initiator should still work.
+# This test confirms that revocation is grant-scoped, not identity-scoped,
+# and documents that behavior explicitly.
+#
+# Expected (current behavior): a fresh grant with a new grant_id is ALLOWED
+# because only the original grant_id is in the revocation store.
+#
+# This is the GAP to discuss: should revocation be identity-scoped or
+# should the task initiator be required to re-authorize explicitly?
+# ---------------------------------------------------------------------------
+
+def test_revoked_grant_reuse_via_fresh_chain() -> None:
+    """
+    GAP (documented): Revoking grant-001 does not prevent the same grantor
+    from issuing grant-002 with identical authority. The current revocation
+    model is grant-scoped, not identity-scoped or task-scoped.
+
+    This test records the current behavior. v0.4 will decide whether this
+    is acceptable or requires a task-level re-authorization mechanism.
+    """
+    task = make_task("task-revoke-001")
+
+    original_grant = make_grant(
+        grant_id="grant-001",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id="task-revoke-001",
+    )
+
+    fresh_grant = make_grant(
+        grant_id="grant-002",   # different grant_id, same authority
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id="task-revoke-001",
+    )
+
+    gate = Ruhusa(policy_store=policy_store())
+
+    # Revoke the original grant
+    gate.revoke_grant(
+        original_grant.grant_id,
+        reason="authority withdrawn",
+        revoked_at=NOW,
+    )
+
+    # Original grant is blocked
+    original_req = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        chain=(original_grant,),
+    )
+    original_decision = gate.authorize(original_req, now=NOW + timedelta(seconds=1))
+    assert original_decision.effect == DecisionEffect.DENY
+    assert "revoked" in original_decision.reason
+
+    # Fresh grant (same grantor, same authority, different grant_id) is currently ALLOWED
+    # This documents the gap: revocation is grant-scoped, not identity-scoped.
+    fresh_req = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        chain=(fresh_grant,),
+    )
+    fresh_decision = gate.authorize(fresh_req, now=NOW + timedelta(seconds=1))
+
+    # Current behavior: ALLOW (gap)
+    # If v0.4 adds task-level revocation, this assertion should be updated.
+    assert fresh_decision.effect == DecisionEffect.ALLOW, (
+        "GAP: A fresh grant with the same authority is currently allowed after "
+        "the original grant is revoked. v0.4 should decide whether task-level "
+        "re-authorization is required."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Attack 4: Cross-task replay after denial
+#
+# Scenario: An agent is denied on task-A (expired grant). It replays the
+# same grant against task-B. The task-binding check should catch this
+# because the grant's task_id does not match task-B's task_id.
+#
+# Expected: BLOCKS — grant is bound to task-A; task-B is rejected.
+# ---------------------------------------------------------------------------
+
+def test_cross_task_replay_after_denial() -> None:
+    """
+    BLOCKS: A grant denied under task-A (here: due to task-id mismatch when
+    replayed) cannot be reused to authorize an action under task-B.
+    """
+    task_a = make_task("task-A")
+    task_b = make_task("task-B")
+
+    grant_for_a = make_grant(
+        grant_id="grant-task-a",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id="task-A",
+    )
+
+    # Denied under task-A (imagine scope exceeded, then agent retries under task-B)
+    req_a = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 9999},   # exceeds scope — denied
+        task=task_a,
+        chain=(grant_for_a,),
+    )
+    gate = Ruhusa(policy_store=policy_store())
+    decision_a = gate.authorize(req_a, now=NOW)
+    assert decision_a.effect == DecisionEffect.DENY
+
+    # Agent replays the same grant under task-B
+    req_b = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task_b,
+        chain=(grant_for_a,),   # grant is bound to task-A
+    )
+    decision_b = gate.authorize(req_b, now=NOW)
+
+    assert decision_b.effect == DecisionEffect.DENY
+    assert "bound to a different task" in decision_b.reason
+
+
+# ---------------------------------------------------------------------------
+# Attack 5: Equivalent action retried through a different delegation path
+#
+# Scenario: billing-agent is denied because its grant exceeds the allowed
+# amount. It constructs an alternate two-hop chain: user-1 → supervisor →
+# billing-agent, hoping that routing through an intermediate grants wider
+# effective authority. The scope must still be capped at the parent's limit
+# at every hop; the policy condition also applies to the final request amount.
+#
+# Expected: BLOCKS — scope at each hop is attenuated; policy condition
+# independently enforces the amount cap on the final request.
+# ---------------------------------------------------------------------------
+
+def test_alternate_delegation_path_does_not_widen_effective_authority() -> None:
+    """
+    BLOCKS: Routing a delegation through an additional intermediate
+    (user-1 → supervisor → billing-agent) does not grant wider effective
+    authority than a direct delegation. Scope attenuation and the policy
+    condition both apply independently.
+    """
+    task = make_task("task-alternate-001")
+
+    supervisor_scope = Scope(
+        actions=frozenset({"issue_refund"}),
+        resource_prefixes=("customer:123",),
+        max_numeric_arguments={"amount": 500},
+    )
+    billing_scope = Scope(
+        actions=frozenset({"issue_refund"}),
+        resource_prefixes=("customer:123",),
+        max_numeric_arguments={"amount": 500},
+    )
+
+    grant_to_supervisor = make_grant(
+        grant_id="grant-supervisor",
+        grantor_id="user-1",
+        grantee_id="supervisor-agent",
+        task_id="task-alternate-001",
+        scope=supervisor_scope,
+    )
+    grant_to_billing = make_grant(
+        grant_id="grant-billing",
+        grantor_id="supervisor-agent",
+        grantee_id="billing-agent",
+        task_id="task-alternate-001",
+        scope=billing_scope,
+    )
+
+    # Request an amount that is within delegated scope but exceeds what the
+    # policy allows (policy allows ≤ $500; both grants cap at $500;
+    # this request is exactly $500 — should be ALLOW)
+    req_within = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 500},
+        task=task,
+        chain=(grant_to_supervisor, grant_to_billing),
+    )
+    gate = Ruhusa(policy_store=policy_store())
+    decision_within = gate.authorize(req_within, now=NOW)
+    assert decision_within.effect == DecisionEffect.ALLOW
+
+    # Request an amount that exceeds the delegated scope — must be denied
+    # regardless of how many hops the chain has.
+    req_over = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 750},
+        task=task,
+        chain=(grant_to_supervisor, grant_to_billing),
+    )
+    decision_over = gate.authorize(req_over, now=NOW)
+    assert decision_over.effect == DecisionEffect.DENY
