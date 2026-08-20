@@ -16,20 +16,27 @@ The project focuses on a simple security principle:
 
 > The model may propose an action, but a deterministic authorization layer must decide whether that action is allowed.
 
-Ruhusa is designed to explore security questions involving agent identity, delegation, authorization propagation, resource constraints, argument-level controls, human approval, revocation, and auditability.
+Ruhusa is designed to explore security questions involving agent identity, delegation, authorization propagation, resource constraints, argument-level controls, human approval, revocation, task binding, replay protection, and auditability.
 
-## v0.1 Goals
+## v0.3.0 Capabilities
 
-Ruhusa v0.1 provides a small deterministic authorization core for experimenting with:
+Ruhusa v0.3.0 provides a deterministic authorization core for experimenting with:
 
 - default-deny authorization
 - least-privilege delegation
+- multi-hop delegation validation
+- delegated-scope attenuation
 - resource and argument constraints
 - human approval decisions
 - fail-closed policy evaluation
 - hash-chained audit logging
+- mid-workflow grant revocation
+- fail-closed revocation checks
+- task-bound delegation
+- cross-task replay protection
+- multi-hop task consistency
 
-The initial release intentionally keeps the authorization core independent of LangGraph, MCP, and A2A. Framework integrations can be added after the core security invariants are tested.
+The authorization core intentionally remains independent of LangGraph, MCP, and A2A. Framework integrations can be added after the core security invariants and experimental benchmarks are established.
 
 ## Requirements
 
@@ -139,7 +146,7 @@ if decision.allowed:
     execute_tool()
 ```
 
-Ruhusa evaluates authorization at the action boundary:
+Ruhusa evaluates authorization at the protected action boundary:
 
 ```text
 Agent proposes action
@@ -149,7 +156,9 @@ Agent proposes action
         |
         +-- Task valid?
         +-- Delegation valid and active?
-        +-- Authority narrowed?
+        +-- Grant bound to current task?
+        +-- Delegated authority narrowed?
+        +-- Grant currently revoked?
         +-- Resource allowed?
         +-- Arguments allowed?
         +-- Policy matched?
@@ -158,9 +167,11 @@ Agent proposes action
 ALLOW | DENY | REQUIRE_APPROVAL
 ```
 
+Authorization is evaluated for each protected action. A grant that was valid earlier in a workflow can therefore be denied later if it has been revoked or if it is presented in a different task context.
+
 ## Security Principles
 
-Ruhusa v0.1 aims to preserve these invariants:
+Ruhusa v0.3.0 aims to preserve these invariants:
 
 1. Fail closed when authorization cannot be evaluated safely.
 2. Prevent delegated authority from expanding.
@@ -169,34 +180,61 @@ Ruhusa v0.1 aims to preserve these invariants:
 5. Record authorization decisions in a hash-chained audit log.
 6. Keep trusted authorization context outside agent-controlled prompt data.
 7. Reject delegation grants that are expired, not yet active, or have invalid validity windows.
-8. Cover security-relevant behavior with tests.
+8. Re-check current revocation state before protected delegated actions.
+9. Deny when revocation state cannot be safely determined.
+10. Bind delegated authority to the task for which it was issued.
+11. Reject cross-task replay and cross-task delegation-chain splicing.
+12. Cover security-relevant behavior with tests.
 
-> Note: the v0.1 audit log is **hash-chained**, not cryptographically anchored or independently signed. It should not yet be treated as a production tamper-evident audit system.
+> Note: the current audit log is hash-chained, not cryptographically anchored or independently signed. It should not yet be treated as a production tamper-evident audit system.
+
+## Milestones
+
+### v0.1 — Deterministic Authorization Core
+
+Established the initial authorization boundary with default deny, scoped delegation, human approval, fail-closed policy evaluation, and hash-chained audit logging.
+
+### v0.2 — Mid-Workflow Revocation
+
+Added revocation records, continuous revocation checks, fail-closed revocation behavior, and support for earlier emergency revocation superseding a later scheduled revocation.
+
+### v0.3 — Task-Bound Delegation and Replay Protection
+
+Bound delegation grants to their originating task and added checks that reject cross-task replay and inconsistent multi-hop task chains.
 
 ## Research Direction
 
-Ruhusa is intended to support research into authorization correctness across dynamic multi-agent workflows, including:
+Ruhusa is intended to support research into authorization preservation across dynamic multi-agent workflows.
 
-- multi-hop delegation
-- mid-workflow revocation
+The current implementation establishes foundational authorization invariants. Future research milestones are expected to evaluate behavior under:
+
 - retry-induced privilege escalation
-- replanning-induced privilege escalation
-- tool substitution
+- replanning after authorization denial
+- delegation-chain mutation
+- stale or replayed authority
+- tool substitution and tool-identity confusion
 - cross-user and cross-resource access
 - approval bypass
 - policy mutation
-- expired authority replay
+- authorization propagation across dynamic workflows
 - audit reconstruction
 
-Future versions are expected to explore integrations with:
+Future versions may also explore integrations with:
 
 - LangGraph
 - Model Context Protocol (MCP)
 - Agent2Agent (A2A)
-- OAuth/OIDC
+- OAuth/OIDC and token exchange
 - enterprise policy decision points
+- OpenID AuthZEN-compatible authorization APIs
 - OPA/Rego or comparable policy engines
 - OpenTelemetry-based tracing and observability
+
+## Project Status
+
+Ruhusa is a pre-1.0 research framework. APIs and security models may change as new authorization invariants and adversarial benchmarks are added.
+
+It is not yet intended to replace a production IAM, authorization server, or policy decision point.
 
 ## Contributing
 
