@@ -11,8 +11,6 @@ All five scenarios are currently blocked.
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from ruhusa import (
     AuthorizationRequest,
     DecisionEffect,
@@ -428,3 +426,75 @@ def test_alternate_delegation_path_does_not_widen_effective_authority() -> None:
     )
     decision_over = gate.authorize(req_over, now=NOW)
     assert decision_over.effect == DecisionEffect.DENY
+
+
+# ---------------------------------------------------------------------------
+# Attack 6: Registered grant ID presented with modified scope
+#
+# Scenario: The attacker knows a legitimate grant_id that was registered
+# through the grant store. Rather than using the original grant, they
+# construct a new DelegationGrant object with the same grant_id but a wider
+# scope (e.g. $500 → $5000). Since only the ID is recognized, an ID-only
+# check (contains) would pass; the content-integrity check (is_registered)
+# must catch the mismatch.
+#
+# Expected: BLOCKS — presented grant contents do not match the issued grant.
+# ---------------------------------------------------------------------------
+
+def test_registered_id_with_tampered_scope_is_denied() -> None:
+    """
+    BLOCKS: Presenting a known grant_id with modified contents (wider scope)
+    is denied because the full-equality check fails. The denial reason
+    distinguishes 'contents do not match' from 'ID unknown'.
+    """
+    task = make_task("task-tamper-001")
+    grant_store = InMemoryGrantStore()
+
+    # Register the legitimate grant (scope capped at $500)
+    legitimate_grant = grant_store.register(
+        make_grant(
+            grant_id="grant-legit",
+            grantor_id="user-1",
+            grantee_id="billing-agent",
+            task_id="task-tamper-001",
+            scope=REFUND_SCOPE,   # capped at $500
+        )
+    )
+
+    # Attacker constructs a grant with the same grant_id but a wider scope
+    tampered_grant = DelegationGrant(
+        grant_id=legitimate_grant.grant_id,   # known, registered ID
+        grantor_id=legitimate_grant.grantor_id,
+        grantee_id=legitimate_grant.grantee_id,
+        task_id=legitimate_grant.task_id,
+        scope=WIDE_SCOPE,   # widened to $2000
+        issued_at=legitimate_grant.issued_at,
+        expires_at=legitimate_grant.expires_at,
+    )
+
+    req = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 1500},
+        task=task,
+        chain=(tampered_grant,),
+    )
+
+    gate = Ruhusa(policy_store=policy_store(), grant_store=grant_store)
+    decision = gate.authorize(req, now=NOW)
+
+    assert decision.effect == DecisionEffect.DENY
+    assert "contents do not match" in decision.reason
+
+    # Confirm the legitimate grant still works at an allowed amount
+    legit_req = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        chain=(legitimate_grant,),
+    )
+    legit_decision = gate.authorize(legit_req, now=NOW)
+    assert legit_decision.effect == DecisionEffect.ALLOW
