@@ -11,6 +11,8 @@ All five scenarios are currently blocked.
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from ruhusa import (
     AuthorizationRequest,
     DecisionEffect,
@@ -498,3 +500,56 @@ def test_registered_id_with_tampered_scope_is_denied() -> None:
     )
     legit_decision = gate.authorize(legit_req, now=NOW)
     assert legit_decision.effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Attack 7: Grant-store backend becomes unavailable
+#
+# Scenario: Ruhusa is configured with a grant store whose backend throws an
+# exception during the issuance check (e.g. network timeout, database error).
+# Authorization must fail closed rather than letting the exception propagate
+# or defaulting to ALLOW.
+#
+# Expected: BLOCKS — any exception from the grant store causes DENY with
+# "grant issuance status unavailable" reason.
+# ---------------------------------------------------------------------------
+
+class _BrokenGrantStore(InMemoryGrantStore):
+    """Grant store that simulates a backend failure on every lookup."""
+
+    def is_registered(self, grant: DelegationGrant) -> bool:  # type: ignore[override]
+        raise RuntimeError("grant store backend unavailable")
+
+
+def test_grant_store_failure_is_fail_closed() -> None:
+    """
+    BLOCKS: If the grant store raises an exception during the issuance check,
+    authorize() must deny the request rather than propagating the exception
+    or defaulting to ALLOW.
+
+    This mirrors the same fail-closed guarantee already provided for policy
+    evaluation failures and revocation-store failures.
+    """
+    task = make_task("task-failclosed-001")
+
+    grant = make_grant(
+        grant_id="grant-failclosed",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id="task-failclosed-001",
+    )
+
+    req = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        chain=(grant,),
+    )
+
+    gate = Ruhusa(policy_store=policy_store(), grant_store=_BrokenGrantStore())
+    decision = gate.authorize(req, now=NOW)
+
+    assert decision.effect == DecisionEffect.DENY
+    assert "grant issuance status unavailable" in decision.reason
