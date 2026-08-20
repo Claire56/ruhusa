@@ -37,6 +37,12 @@ def validate_delegation_chain(
         )
 
     for index, grant in enumerate(chain):
+        if grant.task_id != request.task.task_id:
+            return DelegationValidation(
+                False,
+                f"delegation grant {grant.grant_id} is bound to a different task",
+            )
+
         issued_at = _as_utc(grant.issued_at)
         expires_at = _as_utc(grant.expires_at)
 
