@@ -62,6 +62,7 @@ def grant(
         grant_id=f"{grantor}-{grantee}",
         grantor_id=grantor,
         grantee_id=grantee,
+        task_id="t1",
         scope=Scope(
             actions=frozenset({"issue_refund"}),
             resource_prefixes=("customer:123",),
@@ -150,6 +151,7 @@ def test_resource_scope_cannot_widen() -> None:
         grant_id="bad-resource-grant",
         grantor_id="supervisor-agent",
         grantee_id="billing-agent",
+        task_id="t1",
         scope=Scope(
             actions=frozenset({"issue_refund"}),
             resource_prefixes=(),
