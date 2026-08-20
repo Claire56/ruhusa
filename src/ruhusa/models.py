@@ -120,6 +120,15 @@ class AuthorizationRequest:
     task: TaskContext
     delegation_chain: tuple[DelegationGrant, ...] = ()
     context: Mapping[str, Any] = field(default_factory=dict)
+    invoking_principal_id: str | None = None
+    """Trusted runtime identity of the agent or principal that caused this
+    request to be made.  Must be populated by the orchestration layer, not
+    by the executing agent itself, so that it carries provenance guarantees
+    equivalent to those established for delegation chains in v0.4.
+
+    When present and a delegation chain exists, Ruhusa enforces INV-17:
+    the invoking principal must equal the grantor of the leaf delegation grant.
+    """
 
 
 @dataclass(frozen=True)

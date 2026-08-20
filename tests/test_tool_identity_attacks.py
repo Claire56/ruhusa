@@ -12,13 +12,14 @@ address them.
 Tests marked BLOCKS confirm existing controls hold at the tool-identity
 boundary.
 
-Five experiments:
+Six experiments:
 
   Exp 1 — Authorized action routed through substituted tool        GAP: ALLOW
   Exp 2 — Same logical tool name, different implementation          GAP: ALLOW
-  Exp 3 — Confused-deputy: low-privilege induces privileged agent   GAP: ALLOW
+  Exp 3 — Confused-deputy: low-privilege induces privileged agent   BLOCKS (v0.5-A): DENY
   Exp 4 — Completely different action attempted                   BLOCKS: DENY
   Exp 5 — Different resource attempted                            BLOCKS: DENY
+  Exp 6 — Missing invoking principal on delegated request          BLOCKS (v0.5-A): DENY
 """
 
 from datetime import UTC, datetime, timedelta
@@ -227,57 +228,50 @@ def test_same_tool_name_different_implementation_is_not_detected() -> None:
 # Experiment 3: Confused-deputy — low-privilege agent induces privileged agent
 #
 # Scenario: low-privilege-agent wants to issue a refund but has no policy
-# that allows it. A direct request is denied. However, if low-privilege-agent
-# can induce billing-agent (which IS authorized) to make the same request —
-# through prompt injection, a crafted message, or a deceptive sub-task —
-# the result is ALLOW.
+# that allows it. A direct request is denied. If low-privilege-agent induces
+# billing-agent to make the same request, the invoking_principal_id field
+# (v0.5-A) exposes the inducer's identity at authorization time.
 #
-# Ruhusa currently sees:
-#   principal = billing-agent
-#   action    = issue_refund
-#   resource  = customer:123:billing
+# INV-17: the invoking principal must equal the grantor of the leaf delegation
+# grant. If billing-agent was delegated authority by user-1, only user-1
+# is an authorised invoker. low-privilege-agent is not in the chain, so the
+# request is denied.
 #
-# It cannot see:
-#   who caused billing-agent to perform this action
-#   whether billing-agent was acting autonomously or on behalf of an inducer
-#   whether the inducing principal had authority to cause this action
-#
-# GAP: ALLOW — invoking/inducing principal is not tracked.
-#
-# v0.5 goal: capture invoking principal or causal chain so that the effective
-# privilege is the intersection of billing-agent's authority and the invoking
-# principal's authority.
+# BLOCKS (v0.5-A): DENY — invoking principal does not match leaf grantor.
 # ---------------------------------------------------------------------------
 
 
 def test_confused_deputy_low_privilege_induces_privileged_agent() -> None:
     """
-    GAP: A low-privilege agent that cannot perform issue_refund directly can
-    induce billing-agent to perform it. Ruhusa authorizes the action because
-    it evaluates the immediate principal (billing-agent) without tracking who
-    caused billing-agent to act.
+    BLOCKS (v0.5-A): Ruhusa now enforces INV-17 — invocation provenance.
+    The invoking_principal_id must equal the grantor of the leaf delegation
+    grant.
 
-    The confused-deputy pattern:
+    Legitimate path (ALLOW):
 
-      low-privilege-agent
-              |
-              | direct refund request
-              v
-            DENY   (no matching policy)
+      user-1 -- delegates --> billing-agent
+      billing-agent acts; invoking_principal_id = "user-1"
+      leaf.grantor_id = "user-1"  →  match  →  ALLOW
 
-      low-privilege-agent
-              |
-              | induces (prompt injection / crafted sub-task)
-              v
-        billing-agent
-              |
-              | issue_refund
-              v
-            ALLOW  <-- current gap
+    Confused-deputy attack (DENY):
+
+      user-1 -- delegates --> billing-agent
+      low-privilege-agent induces billing-agent to act
+      billing-agent acts; invoking_principal_id = "low-privilege-agent"
+      leaf.grantor_id = "user-1"  →  mismatch  →  DENY
     """
     task = make_task("task-deputy-001")
 
-    # Step 1: low-privilege-agent requests directly — correctly denied.
+    grant = make_grant(
+        grant_id="grant-deputy",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id="task-deputy-001",
+    )
+
+    gate = Ruhusa(policy_store=policy_store())
+
+    # Step 1: low-privilege-agent direct request — still denied.
     direct_req = make_request(
         principal_id="low-privilege-agent",
         action="issue_refund",
@@ -285,29 +279,35 @@ def test_confused_deputy_low_privilege_induces_privileged_agent() -> None:
         arguments={"amount": 250},
         task=task,
     )
+    assert gate.authorize(direct_req, now=NOW).effect == DecisionEffect.DENY
 
-    gate = Ruhusa(policy_store=policy_store())
-    direct_decision = gate.authorize(direct_req, now=NOW)
-
-    assert direct_decision.effect == DecisionEffect.DENY  # BLOCKS: direct denied
-
-    # Step 2: billing-agent makes the same request.
-    # In a real attack, billing-agent was induced to do this by
-    # low-privilege-agent. Ruhusa sees only billing-agent as principal.
-    deputy_req = make_request(
-        principal_id="billing-agent",
+    # Step 2: billing-agent acts but invoker is low-privilege-agent.
+    # INV-17: "low-privilege-agent" != leaf.grantor_id ("user-1")  →  DENY.
+    deputy_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
         action="issue_refund",
         resource="customer:123:billing",
         arguments={"amount": 250},
         task=task,
+        delegation_chain=(grant,),
+        invoking_principal_id="low-privilege-agent",
     )
-
     deputy_decision = gate.authorize(deputy_req, now=NOW)
+    assert deputy_decision.effect == DecisionEffect.DENY
+    assert "invoking principal" in deputy_decision.reason
 
-    # GAP: request is ALLOW — Ruhusa cannot see who caused billing-agent to act.
-    assert deputy_decision.effect == DecisionEffect.ALLOW
-    # v0.5: with invoking-principal tracking, this should be DENY when the
-    # inducing principal (low-privilege-agent) lacked authority for the action.
+    # Step 3: legitimate invocation — user-1 is both the delegator and invoker.
+    # INV-17: "user-1" == leaf.grantor_id ("user-1")  →  ALLOW.
+    legitimate_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invoking_principal_id="user-1",
+    )
+    assert gate.authorize(legitimate_req, now=NOW).effect == DecisionEffect.ALLOW
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +331,7 @@ def test_completely_different_action_is_denied() -> None:
 
     req = make_request(
         principal_id="billing-agent",
-        action="delete_account",   # not in policy or delegated scope
+        action="delete_account",  # not in policy or delegated scope
         resource="customer:123:billing",
         arguments={"amount": 250},
         task=task,
@@ -364,7 +364,7 @@ def test_different_resource_is_denied() -> None:
     req = make_request(
         principal_id="billing-agent",
         action="issue_refund",
-        resource="customer:456:billing",   # outside authorized prefix
+        resource="customer:456:billing",  # outside authorized prefix
         arguments={"amount": 250},
         task=task,
     )
@@ -373,3 +373,65 @@ def test_different_resource_is_denied() -> None:
     decision = gate.authorize(req, now=NOW)
 
     assert decision.effect == DecisionEffect.DENY
+
+
+# ---------------------------------------------------------------------------
+# Experiment 6: Missing invoking principal on a delegated request
+#
+# Scenario: A delegated request arrives with invoking_principal_id=None.
+# Before v0.5-A this was treated as a skip (the INV-17 check was opt-in).
+# An attacker could omit the field entirely to bypass the provenance check.
+#
+# v0.5-A tightens the control: when a delegation chain is present, omitting
+# invoking_principal_id is treated as a provenance failure and results in DENY.
+# The field cannot be left absent to opt out of the check.
+#
+# BLOCKS (v0.5-A): DENY — missing invoking principal is fail-closed.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_invoking_principal_is_denied_for_delegated_action() -> None:
+    """
+    BLOCKS (v0.5-A): Omitting invoking_principal_id on a delegated request is
+    treated as a provenance failure, not a skip.  INV-17 is now fail-closed:
+    an attacker cannot bypass it by leaving the field None.
+
+    Contrast with the legitimate path (invoking_principal_id supplied and
+    matching the leaf grantor), which must remain ALLOW.
+    """
+    task = make_task("task-noinvoker-001")
+    noinvoker_grant = make_grant(
+        grant_id="grant-noinvoker",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id="task-noinvoker-001",
+    )
+
+    # Delegated request with invoking_principal_id explicitly absent.
+    req_no_invoker = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(noinvoker_grant,),
+        invoking_principal_id=None,
+    )
+
+    gate = Ruhusa(policy_store=policy_store())
+    decision = gate.authorize(req_no_invoker, now=NOW)
+
+    assert decision.effect == DecisionEffect.DENY
+    assert "invoking principal" in decision.reason
+
+    # Sanity check: the same request with the correct invoking principal is ALLOW.
+    req_with_invoker = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(noinvoker_grant,),
+        invoking_principal_id="user-1",
+    )
+    assert gate.authorize(req_with_invoker, now=NOW).effect == DecisionEffect.ALLOW

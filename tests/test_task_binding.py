@@ -89,6 +89,7 @@ def test_grant_bound_to_correct_task_is_allowed() -> None:
         arguments={"amount": 250},
         task=task,
         delegation_chain=(grant,),
+        invoking_principal_id="user-1",
     )
 
     decision = Ruhusa(policy_store=policy_store()).authorize(req, now=NOW)
@@ -157,6 +158,7 @@ def test_multi_hop_chain_same_task_is_allowed() -> None:
         arguments={"amount": 250},
         task=task,
         delegation_chain=(g1, g2),
+        invoking_principal_id="supervisor-agent",
     )
 
     decision = Ruhusa(policy_store=policy_store()).authorize(req, now=NOW)
