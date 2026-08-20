@@ -1,5 +1,6 @@
 from .audit import AuditEvent, InMemoryAuditLog
 from .core import Ruhusa
+from .grants import InMemoryGrantStore
 from .models import (
     AuthorizationDecision,
     AuthorizationRequest,
@@ -19,6 +20,7 @@ __all__ = [
     "DecisionEffect",
     "DelegationGrant",
     "InMemoryAuditLog",
+    "InMemoryGrantStore",
     "InMemoryRevocationStore",
     "PolicyRule",
     "Principal",
