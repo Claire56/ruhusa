@@ -81,23 +81,32 @@ class Ruhusa:
             )
 
         if self.grant_store is not None:
-            for grant in request.delegation_chain:
-                if not self.grant_store.is_registered(grant):
-                    stored = self.grant_store.get(grant.grant_id)
-                    if stored is None:
-                        reason = (
-                            f"delegation grant {grant.grant_id} was not issued"
-                            " through a trusted boundary"
+            try:
+                for grant in request.delegation_chain:
+                    if not self.grant_store.is_registered(grant):
+                        stored = self.grant_store.get(grant.grant_id)
+                        if stored is None:
+                            reason = (
+                                f"delegation grant {grant.grant_id} was not issued"
+                                " through a trusted boundary"
+                            )
+                        else:
+                            reason = (
+                                f"delegation grant {grant.grant_id} contents do not"
+                                " match the issued grant"
+                            )
+                        return self._record(
+                            request,
+                            AuthorizationDecision(DecisionEffect.DENY, reason),
                         )
-                    else:
-                        reason = (
-                            f"delegation grant {grant.grant_id} contents do not"
-                            " match the issued grant"
-                        )
-                    return self._record(
-                        request,
-                        AuthorizationDecision(DecisionEffect.DENY, reason),
-                    )
+            except Exception:
+                return self._record(
+                    request,
+                    AuthorizationDecision(
+                        DecisionEffect.DENY,
+                        "grant issuance status unavailable; default deny",
+                    ),
+                )
 
         try:
             for grant in request.delegation_chain:
