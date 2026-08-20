@@ -11,8 +11,6 @@ All five scenarios are currently blocked.
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from ruhusa import (
     AuthorizationRequest,
     DecisionEffect,
