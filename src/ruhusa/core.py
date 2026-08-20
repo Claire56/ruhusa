@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from .audit import InMemoryAuditLog
 from .delegation import validate_delegation_chain
+from .grants import InMemoryGrantStore
 from .models import AuthorizationDecision, AuthorizationRequest, DecisionEffect
 from .policy import StaticPolicyStore
 from .revocation import InMemoryRevocationStore, RevocationRecord
@@ -13,11 +14,16 @@ from .revocation import InMemoryRevocationStore, RevocationRecord
 class Ruhusa:
     """Deterministic authorization boundary for agent actions.
 
-    Security invariants in v0.2:
+    Security invariants in v0.3:
     - deny by default
     - task must be active
     - delegation chain must be identity-continuous
     - delegated scope may narrow, never expand
+    - grants must originate from the task initiator
+    - each grant must be bound to the current task
+    - if a grant store is configured, every chain grant must have been
+      registered through it; unregistered grants are denied regardless
+      of their contents
     - revoked authority must not authorize subsequent actions
     - action/resource/arguments must fit effective delegated scope
     - policy evaluation failures deny the action
@@ -30,12 +36,14 @@ class Ruhusa:
         policy_store: StaticPolicyStore | None = None,
         audit_log: InMemoryAuditLog | None = None,
         revocation_store: InMemoryRevocationStore | None = None,
+        grant_store: InMemoryGrantStore | None = None,
     ) -> None:
         self.policy_store = policy_store or StaticPolicyStore()
         self.audit_log = audit_log or InMemoryAuditLog()
         self.revocation_store = (
             revocation_store if revocation_store is not None else InMemoryRevocationStore()
         )
+        self.grant_store = grant_store
 
     def revoke_grant(
         self,
@@ -71,6 +79,34 @@ class Ruhusa:
                 request,
                 AuthorizationDecision(DecisionEffect.DENY, delegation.reason),
             )
+
+        if self.grant_store is not None:
+            try:
+                for grant in request.delegation_chain:
+                    if not self.grant_store.is_registered(grant):
+                        stored = self.grant_store.get(grant.grant_id)
+                        if stored is None:
+                            reason = (
+                                f"delegation grant {grant.grant_id} was not issued"
+                                " through a trusted boundary"
+                            )
+                        else:
+                            reason = (
+                                f"delegation grant {grant.grant_id} contents do not"
+                                " match the issued grant"
+                            )
+                        return self._record(
+                            request,
+                            AuthorizationDecision(DecisionEffect.DENY, reason),
+                        )
+            except Exception:
+                return self._record(
+                    request,
+                    AuthorizationDecision(
+                        DecisionEffect.DENY,
+                        "grant issuance status unavailable; default deny",
+                    ),
+                )
 
         try:
             for grant in request.delegation_chain:
