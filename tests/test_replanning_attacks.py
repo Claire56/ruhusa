@@ -3,20 +3,21 @@ tests/test_replanning_attacks.py
 
 v0.4 attack scenarios: replanning and delegation-bypass experiments.
 
-Each test documents the attack, the expected outcome under the current
-authorization model, and (where relevant) whether a gap exists.
+Each test documents the attack and the expected outcome.
 
-Tests marked BLOCKS confirm Ruhusa already prevents the attack.
-Tests marked GAP confirm the attack currently succeeds — these drive
-new v0.4 controls.
+Tests marked BLOCKS confirm Ruhusa prevents the attack.
+All five scenarios are currently blocked.
 """
 
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from ruhusa import (
     AuthorizationRequest,
     DecisionEffect,
     DelegationGrant,
+    InMemoryGrantStore,
     PolicyRule,
     Principal,
     Ruhusa,
@@ -116,7 +117,6 @@ def policy_store() -> StaticPolicyStore:
 # Expected: BLOCKS — chain does not originate from task initiator.
 # ---------------------------------------------------------------------------
 
-
 def test_denied_agent_cannot_delegate_to_bypass_denial() -> None:
     """
     BLOCKS: An agent that was denied cannot create a valid delegation chain
@@ -128,7 +128,7 @@ def test_denied_agent_cannot_delegate_to_bypass_denial() -> None:
     # billing-agent tries to delegate to sub-agent, rooting the chain in itself
     forged_grant = make_grant(
         grant_id="forged-grant",
-        grantor_id="billing-agent",  # not the task initiator
+        grantor_id="billing-agent",   # not the task initiator
         grantee_id="sub-agent",
         task_id="task-refund-001",
     )
@@ -158,7 +158,6 @@ def test_denied_agent_cannot_delegate_to_bypass_denial() -> None:
 # Expected: BLOCKS — scope attenuation check prevents widening.
 # ---------------------------------------------------------------------------
 
-
 def test_child_grant_cannot_widen_scope() -> None:
     """
     BLOCKS: A child delegation grant cannot exceed the scope of its parent.
@@ -171,7 +170,7 @@ def test_child_grant_cannot_widen_scope() -> None:
         grantor_id="user-1",
         grantee_id="billing-agent",
         task_id="task-escalation-001",
-        scope=REFUND_SCOPE,  # capped at $500
+        scope=REFUND_SCOPE,   # capped at $500
     )
 
     escalated_grant = make_grant(
@@ -179,7 +178,7 @@ def test_child_grant_cannot_widen_scope() -> None:
         grantor_id="billing-agent",
         grantee_id="sub-agent",
         task_id="task-escalation-001",
-        scope=WIDE_SCOPE,  # attempts to widen to $2000
+        scope=WIDE_SCOPE,   # attempts to widen to $2000
     )
 
     req = make_request(
@@ -198,49 +197,53 @@ def test_child_grant_cannot_widen_scope() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Attack 3: Revoked authority reused through a fresh delegation chain
+# Attack 3: Revoked authority reused through a fabricated fresh grant
 #
-# Scenario: user-1 grants billing-agent authority, then revokes it.
-# billing-agent responds by requesting a new grant — but the revocation
-# is on the grant_id, not on any re-issued grant. A genuinely fresh grant
-# (different grant_id, same scope) from the task initiator should still work.
-# This test confirms that revocation is grant-scoped, not identity-scoped,
-# and documents that behavior explicitly.
+# Scenario: user-1 grants billing-agent authority via grant-001, registered
+# in the grant store. grant-001 is then revoked. The attacker fabricates
+# grant-002 with identical fields (same grantor, grantee, scope, task) but
+# a new grant_id, hoping Ruhusa will accept it because the revocation is
+# keyed to grant-001.
 #
-# Expected (current behavior): a fresh grant with a new grant_id is ALLOWED
-# because only the original grant_id is in the revocation store.
+# Fix (v0.4): Ruhusa is configured with an InMemoryGrantStore. Only grants
+# registered through the store are accepted. grant-002 was never registered,
+# so it is denied regardless of its contents.
 #
-# This is the GAP to discuss: should revocation be identity-scoped or
-# should the task initiator be required to re-authorize explicitly?
+# Expected: BLOCKS — unregistered grant is denied with "trusted boundary"
+# reason.
 # ---------------------------------------------------------------------------
 
-
-def test_revoked_grant_reuse_via_fresh_chain() -> None:
+def test_revoked_grant_reuse_via_fresh_chain_is_blocked_by_grant_store() -> None:
     """
-    GAP (documented): Revoking grant-001 does not prevent the same grantor
-    from issuing grant-002 with identical authority. The current revocation
-    model is grant-scoped, not identity-scoped or task-scoped.
+    BLOCKS: When Ruhusa is configured with a grant store, a fabricated
+    replacement grant is denied because it was not registered through the
+    trusted issuance boundary.
 
-    This test records the current behavior. v0.4 will decide whether this
-    is acceptable or requires a task-level re-authorization mechanism.
+    This closes the gap identified in the initial v0.4 experiments:
+    revocation was grant-scoped, allowing an attacker to bypass it by
+    constructing a new grant_id with identical authority.
     """
     task = make_task("task-revoke-001")
+    grant_store = InMemoryGrantStore()
 
-    original_grant = make_grant(
-        grant_id="grant-001",
+    original_grant = grant_store.register(
+        make_grant(
+            grant_id="grant-001",
+            grantor_id="user-1",
+            grantee_id="billing-agent",
+            task_id="task-revoke-001",
+        )
+    )
+
+    # Fabricated replacement — never registered in the grant store
+    fabricated_grant = make_grant(
+        grant_id="grant-002",
         grantor_id="user-1",
         grantee_id="billing-agent",
         task_id="task-revoke-001",
     )
 
-    fresh_grant = make_grant(
-        grant_id="grant-002",  # different grant_id, same authority
-        grantor_id="user-1",
-        grantee_id="billing-agent",
-        task_id="task-revoke-001",
-    )
-
-    gate = Ruhusa(policy_store=policy_store())
+    gate = Ruhusa(policy_store=policy_store(), grant_store=grant_store)
 
     # Revoke the original grant
     gate.revoke_grant(
@@ -249,7 +252,7 @@ def test_revoked_grant_reuse_via_fresh_chain() -> None:
         revoked_at=NOW,
     )
 
-    # Original grant is blocked
+    # Original grant is denied: revoked
     original_req = make_request(
         principal_id="billing-agent",
         action="issue_refund",
@@ -262,25 +265,39 @@ def test_revoked_grant_reuse_via_fresh_chain() -> None:
     assert original_decision.effect == DecisionEffect.DENY
     assert "revoked" in original_decision.reason
 
-    # Fresh grant (same grantor, same authority, different grant_id) is currently ALLOWED
-    # This documents the gap: revocation is grant-scoped, not identity-scoped.
-    fresh_req = make_request(
+    # Fabricated grant is denied: not in the trusted issuance store
+    fabricated_req = make_request(
         principal_id="billing-agent",
         action="issue_refund",
         resource="customer:123:billing",
         arguments={"amount": 250},
         task=task,
-        chain=(fresh_grant,),
+        chain=(fabricated_grant,),
     )
-    fresh_decision = gate.authorize(fresh_req, now=NOW + timedelta(seconds=1))
+    fabricated_decision = gate.authorize(fabricated_req, now=NOW + timedelta(seconds=1))
+    assert fabricated_decision.effect == DecisionEffect.DENY
+    assert "trusted boundary" in fabricated_decision.reason
 
-    # Current behavior: ALLOW (gap)
-    # If v0.4 adds task-level revocation, this assertion should be updated.
-    assert fresh_decision.effect == DecisionEffect.ALLOW, (
-        "GAP: A fresh grant with the same authority is currently allowed after "
-        "the original grant is revoked. v0.4 should decide whether task-level "
-        "re-authorization is required."
+    # A legitimately re-issued grant (registered through the store) is still ALLOW.
+    # This confirms the fix is targeted: it blocks fabrication, not re-authorization.
+    reissued_grant = grant_store.register(
+        make_grant(
+            grant_id="grant-003",
+            grantor_id="user-1",
+            grantee_id="billing-agent",
+            task_id="task-revoke-001",
+        )
     )
+    reissued_req = make_request(
+        principal_id="billing-agent",
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        chain=(reissued_grant,),
+    )
+    reissued_decision = gate.authorize(reissued_req, now=NOW + timedelta(seconds=1))
+    assert reissued_decision.effect == DecisionEffect.ALLOW
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +309,6 @@ def test_revoked_grant_reuse_via_fresh_chain() -> None:
 #
 # Expected: BLOCKS — grant is bound to task-A; task-B is rejected.
 # ---------------------------------------------------------------------------
-
 
 def test_cross_task_replay_after_denial() -> None:
     """
@@ -314,7 +330,7 @@ def test_cross_task_replay_after_denial() -> None:
         principal_id="billing-agent",
         action="issue_refund",
         resource="customer:123:billing",
-        arguments={"amount": 9999},  # exceeds scope — denied
+        arguments={"amount": 9999},   # exceeds scope — denied
         task=task_a,
         chain=(grant_for_a,),
     )
@@ -329,7 +345,7 @@ def test_cross_task_replay_after_denial() -> None:
         resource="customer:123:billing",
         arguments={"amount": 250},
         task=task_b,
-        chain=(grant_for_a,),  # grant is bound to task-A
+        chain=(grant_for_a,),   # grant is bound to task-A
     )
     decision_b = gate.authorize(req_b, now=NOW)
 
@@ -349,7 +365,6 @@ def test_cross_task_replay_after_denial() -> None:
 # Expected: BLOCKS — scope at each hop is attenuated; policy condition
 # independently enforces the amount cap on the final request.
 # ---------------------------------------------------------------------------
-
 
 def test_alternate_delegation_path_does_not_widen_effective_authority() -> None:
     """
