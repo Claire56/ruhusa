@@ -98,6 +98,7 @@ class DelegationGrant:
     grant_id: str
     grantor_id: str
     grantee_id: str
+    task_id: str
     scope: Scope
     issued_at: datetime
     expires_at: datetime
