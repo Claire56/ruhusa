@@ -51,6 +51,7 @@ def grant(
         grant_id=grant_id,
         grantor_id=grantor,
         grantee_id=grantee,
+        task_id="revocation-task",
         scope=Scope(
             actions=frozenset({"issue_refund"}),
             resource_prefixes=("customer:123",),
