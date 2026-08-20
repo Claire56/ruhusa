@@ -82,13 +82,21 @@ class Ruhusa:
 
         if self.grant_store is not None:
             for grant in request.delegation_chain:
-                if not self.grant_store.contains(grant.grant_id):
+                if not self.grant_store.is_registered(grant):
+                    stored = self.grant_store.get(grant.grant_id)
+                    if stored is None:
+                        reason = (
+                            f"delegation grant {grant.grant_id} was not issued"
+                            " through a trusted boundary"
+                        )
+                    else:
+                        reason = (
+                            f"delegation grant {grant.grant_id} contents do not"
+                            " match the issued grant"
+                        )
                     return self._record(
                         request,
-                        AuthorizationDecision(
-                            DecisionEffect.DENY,
-                            f"delegation grant {grant.grant_id} was not issued through a trusted boundary",
-                        ),
+                        AuthorizationDecision(DecisionEffect.DENY, reason),
                     )
 
         try:
