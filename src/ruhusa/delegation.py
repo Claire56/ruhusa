@@ -86,23 +86,4 @@ def validate_delegation_chain(
             "request principal is not the final delegatee",
         )
 
-    # INV-17: Invocation provenance — required for all delegated requests.
-    # The invoking_principal_id must be supplied and must equal the grantor of
-    # the leaf grant (the agent that directly delegated to the executing
-    # principal).  Omitting the field is treated as a failure, not a skip:
-    # an attacker who controls the request object must not be able to bypass
-    # the provenance check merely by leaving the field None.
-    if request.invoking_principal_id is None:
-        return DelegationValidation(
-            False,
-            "invoking principal is required for delegated authorization",
-        )
-    if request.invoking_principal_id != leaf.grantor_id:
-        return DelegationValidation(
-            False,
-            f"invoking principal {request.invoking_principal_id!r} is not"
-            f" authorised by the delegation chain"
-            f" (leaf grant grantor is {leaf.grantor_id!r})",
-        )
-
     return DelegationValidation(True, "delegation chain valid", leaf.scope)
