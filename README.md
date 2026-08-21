@@ -12,7 +12,7 @@ Ruhusa means **permission** in Swahili.
 
 Ruhusa is an open-source research framework for studying continuous, least-privilege authorization across AI agents, tools, and multi-agent workflows.
 
-The framework is built around a simple separation of responsibility:
+The framework separates agent reasoning from authorization:
 
 ```text
 Agent / LLM
@@ -141,9 +141,9 @@ These checks can detect missing or obviously unregistered values, but a compromi
 
 Weak mode is therefore a compatibility and consistency mode, not a trusted provenance boundary.
 
-### Strong mode
+### Strong delegated mode
 
-With `InMemoryInvocationStore`, the trusted orchestration layer creates a canonical `InvocationRecord` that binds:
+With `InMemoryInvocationStore`, a trusted orchestration layer creates a canonical `InvocationRecord` that binds:
 
 ```text
 invoker
@@ -158,7 +158,9 @@ recorded_at
 expires_at
 ```
 
-Ruhusa retrieves this canonical record and verifies it against the live request. When a tool registry is also configured, the runtime-observed tool identity is checked against canonical trusted registrations.
+For delegated requests, Ruhusa retrieves this canonical record and verifies it against the live request. When a tool registry is also configured and the record contains tool identity, the runtime-observed tool identity is checked against canonical trusted registrations.
+
+The phrase **strong delegated mode** is deliberate. Current v0.5 testing has confirmed that the same strong-tool guarantee does not yet extend automatically to direct/non-delegated requests.
 
 ## Authorization Flow
 
@@ -171,7 +173,7 @@ AuthorizationRequest
 1. Task validity
         |
         v
-2. Delegation structure
+2. Structural delegation validation
    - chain origin
    - identity continuity
    - task binding
@@ -179,14 +181,14 @@ AuthorizationRequest
    - scope attenuation
         |
         v
-3. Invocation provenance
+3. Invocation provenance for delegated requests
    - strong mode: canonical InvocationRecord
    - weak mode: self-asserted invoker consistency
         |
         v
-4. Tool identity
-   - strong delegated mode: InvocationRecord -> ToolRegistry
-   - weak mode: request fields -> ToolRegistry
+4. Weak-mode tool verification
+   - only when ToolRegistry exists
+   - and InvocationStore does not
         |
         v
 5. Canonical grant provenance
@@ -209,20 +211,65 @@ Audit decision
 
 See `docs/architecture.md` for the detailed architecture and current limitations.
 
-## Known v0.5 Research Questions
+## Current v0.5 Experimental State
 
-v0.5 is not frozen yet. Two cases have been benchmarked and confirmed as gaps; one remains a candidate.
+The current tool/invocation benchmark contains **16 implemented experiments**. Experiments 15 and 16 are confirmed `GAP` results; Experiment 17 remains a candidate.
 
-**Confirmed gaps (running GAP benchmarks):**
+### Confirmed Gap — Experiment 15
 
-- **Experiment 15 — Non-delegated strong-mode tool bypass:** when both an invocation store and tool registry are configured, a request with an empty `delegation_chain` bypasses all tool verification. Current result: `GAP / ALLOW`. Architectural decision pending.
-- **Experiment 16 — Exact same-operation invocation replay:** the invocation store has no one-shot consumption semantics. The same `invocation_id` with identical action, resource, and arguments is accepted on every presentation. Current result: `GAP / ALLOW`. Current design delegates duplicate-side-effect prevention to the execution layer.
+A direct/non-delegated request with both `InvocationStore` and `ToolRegistry` configured can currently skip both:
 
-**Remaining candidate:**
+- strong invocation/tool verification, because that path is inside the delegated-request branch; and
+- weak tool verification, because weak mode is skipped whenever an invocation store exists.
 
-- **Experiment 17 — Missing canonical tool identity:** if a canonical invocation record carries `tool_id=None`, strong tool verification is skipped even when a registry is configured. Not yet benchmarked.
+The benchmark currently reproduces:
 
-These are open research cases, not claimed protections.
+```text
+non-delegated request
+InvocationStore configured
+ToolRegistry configured
+unregistered substitute tool
+        |
+        v
+ALLOW
+```
+
+This is a confirmed v0.5 gap, not a theoretical concern.
+
+### Confirmed Gap — Experiment 16
+
+Operation binding blocks reuse of an invocation ID for a *different* action, resource, or arguments.
+
+It does not currently provide one-shot invocation consumption.
+
+The same valid `invocation_id` can be reused for the exact same operation:
+
+```text
+request #1 -> ALLOW
+request #2 -> ALLOW
+request #3 -> ALLOW
+```
+
+The benchmark therefore establishes the current contract:
+
+> Ruhusa does not currently enforce one-shot invocation semantics.
+
+Whether Ruhusa should add `consume()`-style semantics or explicitly delegate duplicate-side-effect protection to an idempotent execution layer remains an architectural decision for v0.5.
+
+### Remaining Candidate — Experiment 17
+
+Strong tool verification currently runs when the canonical `InvocationRecord` contains a non-`None` `tool_id`.
+
+The remaining question is what Ruhusa should do when:
+
+```text
+InvocationStore configured
+ToolRegistry configured
+protected operation expected to be tool-mediated
+InvocationRecord.tool_id = None
+```
+
+This case is identified but not yet represented by an executable experiment.
 
 ## Documentation
 
@@ -255,7 +302,7 @@ Run the test suite:
 uv run pytest
 ```
 
-Run a specific attack benchmark:
+Run the attack benchmarks:
 
 ```bash
 uv run pytest tests/test_replanning_attacks.py -v
@@ -333,7 +380,19 @@ Introduced adversarial replanning tests, discovered the fresh-grant remint gap, 
 
 ### v0.5 — Invocation Provenance and Tool Identity — in development
 
-Current work studies confused-deputy attacks, forged caller identity, tool substitution, implementation spoofing, operation-bound invocation records, and stale invocation replay.
+Current work studies:
+
+- confused-deputy attacks
+- forged caller identity
+- tool substitution
+- implementation spoofing
+- operation-bound invocation records
+- stale invocation replay
+- non-delegated strong-mode tool enforcement
+- exact invocation replay semantics
+- missing canonical tool identity
+
+The milestone is not frozen while confirmed GAP results remain unresolved or intentionally unclassified as part of the final security contract.
 
 ## Research Direction
 
@@ -344,7 +403,6 @@ The working research question is:
 Future benchmark areas include:
 
 - concurrency and TOCTOU
-- exact invocation replay semantics
 - authorization propagation across branch/merge workflows
 - multi-agent collusion
 - descendant revocation
