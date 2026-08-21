@@ -116,6 +116,7 @@ def policy_store() -> StaticPolicyStore:
 # Expected: BLOCKS — chain does not originate from task initiator.
 # ---------------------------------------------------------------------------
 
+
 def test_denied_agent_cannot_delegate_to_bypass_denial() -> None:
     """
     BLOCKS: An agent that was denied cannot create a valid delegation chain
@@ -127,7 +128,7 @@ def test_denied_agent_cannot_delegate_to_bypass_denial() -> None:
     # billing-agent tries to delegate to sub-agent, rooting the chain in itself
     forged_grant = make_grant(
         grant_id="forged-grant",
-        grantor_id="billing-agent",   # not the task initiator
+        grantor_id="billing-agent",  # not the task initiator
         grantee_id="sub-agent",
         task_id="task-refund-001",
     )
@@ -157,6 +158,7 @@ def test_denied_agent_cannot_delegate_to_bypass_denial() -> None:
 # Expected: BLOCKS — scope attenuation check prevents widening.
 # ---------------------------------------------------------------------------
 
+
 def test_child_grant_cannot_widen_scope() -> None:
     """
     BLOCKS: A child delegation grant cannot exceed the scope of its parent.
@@ -169,7 +171,7 @@ def test_child_grant_cannot_widen_scope() -> None:
         grantor_id="user-1",
         grantee_id="billing-agent",
         task_id="task-escalation-001",
-        scope=REFUND_SCOPE,   # capped at $500
+        scope=REFUND_SCOPE,  # capped at $500
     )
 
     escalated_grant = make_grant(
@@ -177,7 +179,7 @@ def test_child_grant_cannot_widen_scope() -> None:
         grantor_id="billing-agent",
         grantee_id="sub-agent",
         task_id="task-escalation-001",
-        scope=WIDE_SCOPE,   # attempts to widen to $2000
+        scope=WIDE_SCOPE,  # attempts to widen to $2000
     )
 
     req = make_request(
@@ -211,6 +213,7 @@ def test_child_grant_cannot_widen_scope() -> None:
 # Expected: BLOCKS — unregistered grant is denied with "trusted boundary"
 # reason.
 # ---------------------------------------------------------------------------
+
 
 def test_revoked_grant_reuse_via_fresh_chain_is_blocked_by_grant_store() -> None:
     """
@@ -309,6 +312,7 @@ def test_revoked_grant_reuse_via_fresh_chain_is_blocked_by_grant_store() -> None
 # Expected: BLOCKS — grant is bound to task-A; task-B is rejected.
 # ---------------------------------------------------------------------------
 
+
 def test_cross_task_replay_after_denial() -> None:
     """
     BLOCKS: A grant denied under task-A (here: due to task-id mismatch when
@@ -329,7 +333,7 @@ def test_cross_task_replay_after_denial() -> None:
         principal_id="billing-agent",
         action="issue_refund",
         resource="customer:123:billing",
-        arguments={"amount": 9999},   # exceeds scope — denied
+        arguments={"amount": 9999},  # exceeds scope — denied
         task=task_a,
         chain=(grant_for_a,),
     )
@@ -344,7 +348,7 @@ def test_cross_task_replay_after_denial() -> None:
         resource="customer:123:billing",
         arguments={"amount": 250},
         task=task_b,
-        chain=(grant_for_a,),   # grant is bound to task-A
+        chain=(grant_for_a,),  # grant is bound to task-A
     )
     decision_b = gate.authorize(req_b, now=NOW)
 
@@ -364,6 +368,7 @@ def test_cross_task_replay_after_denial() -> None:
 # Expected: BLOCKS — scope at each hop is attenuated; policy condition
 # independently enforces the amount cap on the final request.
 # ---------------------------------------------------------------------------
+
 
 def test_alternate_delegation_path_does_not_widen_effective_authority() -> None:
     """
@@ -442,6 +447,7 @@ def test_alternate_delegation_path_does_not_widen_effective_authority() -> None:
 # Expected: BLOCKS — presented grant contents do not match the issued grant.
 # ---------------------------------------------------------------------------
 
+
 def test_registered_id_with_tampered_scope_is_denied() -> None:
     """
     BLOCKS: Presenting a known grant_id with modified contents (wider scope)
@@ -458,17 +464,17 @@ def test_registered_id_with_tampered_scope_is_denied() -> None:
             grantor_id="user-1",
             grantee_id="billing-agent",
             task_id="task-tamper-001",
-            scope=REFUND_SCOPE,   # capped at $500
+            scope=REFUND_SCOPE,  # capped at $500
         )
     )
 
     # Attacker constructs a grant with the same grant_id but a wider scope
     tampered_grant = DelegationGrant(
-        grant_id=legitimate_grant.grant_id,   # known, registered ID
+        grant_id=legitimate_grant.grant_id,  # known, registered ID
         grantor_id=legitimate_grant.grantor_id,
         grantee_id=legitimate_grant.grantee_id,
         task_id=legitimate_grant.task_id,
-        scope=WIDE_SCOPE,   # widened to $2000
+        scope=WIDE_SCOPE,  # widened to $2000
         issued_at=legitimate_grant.issued_at,
         expires_at=legitimate_grant.expires_at,
     )
@@ -512,6 +518,7 @@ def test_registered_id_with_tampered_scope_is_denied() -> None:
 # Expected: BLOCKS — any exception from the grant store causes DENY with
 # "grant issuance status unavailable" reason.
 # ---------------------------------------------------------------------------
+
 
 class _BrokenGrantStore(InMemoryGrantStore):
     """Grant store that simulates a backend failure on every lookup."""

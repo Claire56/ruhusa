@@ -31,11 +31,23 @@ class InMemoryToolRegistry:
     and prevents registry-poisoning attacks where a malicious caller could replace
     a trusted entry with a substitute.
 
-    The registry is populated by the orchestration layer, not by agents.  Any
-    tool identity that arrives through :class:`~ruhusa.models.AuthorizationRequest`
-    fields is only as trustworthy as the boundary that set those fields — Ruhusa
-    assumes that boundary is the trusted orchestrator, exactly as it does for
-    ``invoking_principal_id``.
+    The registry is populated by the orchestration layer, not by agents.
+
+    **Weak mode** (no :class:`~ruhusa.invocations.InMemoryInvocationStore`
+    configured): Ruhusa reads ``tool_id`` and ``implementation_id`` from the
+    :class:`~ruhusa.models.AuthorizationRequest`.  These fields are supplied by
+    the executing agent and are therefore self-asserted — a compromised agent can
+    forge them to claim any registered identity.  This mode blocks unregistered
+    implementations but cannot detect an agent that falsely claims a registered
+    implementation it is not actually using.
+
+    **Strong mode** (:class:`~ruhusa.invocations.InMemoryInvocationStore`
+    configured): Ruhusa reads ``tool_id`` and ``implementation_id`` from the
+    :class:`~ruhusa.invocations.InvocationRecord` registered by the orchestrator.
+    The orchestrator observes the actual tool implementation at invocation time;
+    the executing agent cannot influence the record.  The self-asserted fields on
+    the request are ignored entirely in this mode.  See INV-18 in the
+    :class:`~ruhusa.core.Ruhusa` security invariants.
     """
 
     def __init__(self) -> None:
