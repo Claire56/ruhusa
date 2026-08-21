@@ -33,11 +33,9 @@ Ruhusa is not an agent framework, workflow engine, identity provider, LLM gatewa
 
 ## Project Status
 
-**Published package version:** `0.3.0`  
-**Current development milestone:** `v0.5` — invocation provenance and tool identity  
+**Published package version:** `0.5.0`  
+**Current milestone:** `v0.5` — invocation provenance and tool identity  
 **Release status:** pre-1.0 research framework
-
-The package version intentionally remains `0.3.0` while v0.5 is under active adversarial testing. The version will be bumped in a dedicated release step after the v0.5 implementation, tests, documentation, and threat-model snapshot are frozen.
 
 APIs and security guarantees may change before 1.0.
 
@@ -141,7 +139,7 @@ These checks can detect missing or obviously unregistered values, but a compromi
 
 Weak mode is therefore a compatibility and consistency mode, not a trusted provenance boundary.
 
-### Strong delegated mode
+### Strong mode
 
 With `InMemoryInvocationStore`, a trusted orchestration layer creates a canonical `InvocationRecord` that binds:
 
@@ -158,9 +156,9 @@ recorded_at
 expires_at
 ```
 
-For delegated requests, Ruhusa retrieves this canonical record and verifies it against the live request. When a tool registry is also configured and the record contains tool identity, the runtime-observed tool identity is checked against canonical trusted registrations.
+For **all** requests (delegated and direct), Ruhusa retrieves this canonical record and verifies executor, task, operation, and expiry. For delegated requests, the authenticated invoker must match the leaf grant grantor. When a tool registry is also configured, the canonical tool identity is checked against trusted registrations; a missing `tool_id` in the record is fail-closed.
 
-The phrase **strong delegated mode** is deliberate. Current v0.5 testing has confirmed that the same strong-tool guarantee does not yet extend automatically to direct/non-delegated requests.
+The v0.5-C architectural fix extended the strong-mode guarantee from delegated requests to all requests.
 
 ## Authorization Flow
 
@@ -181,14 +179,15 @@ AuthorizationRequest
    - scope attenuation
         |
         v
-3. Invocation provenance for delegated requests
-   - strong mode: canonical InvocationRecord
-   - weak mode: self-asserted invoker consistency
+3. Invocation provenance and tool identity (ALL requests when InvocationStore configured)
+   - strong mode: canonical InvocationRecord (executor, task, operation, expiry, tool)
+   - invoker==leaf-grantor check applies only when delegation chain is present
+   - weak mode: self-asserted invoker consistency for delegated requests only
         |
         v
 4. Weak-mode tool verification
    - only when ToolRegistry exists
-   - and InvocationStore does not
+   - and InvocationStore does not (strong mode handles tool identity in step 3)
         |
         v
 5. Canonical grant provenance
@@ -211,30 +210,25 @@ Audit decision
 
 See `docs/architecture.md` for the detailed architecture and current limitations.
 
-## Current v0.5 Experimental State
+## v0.5 Experimental State
 
-The current tool/invocation benchmark contains **16 implemented experiments**. Experiments 15 and 16 are confirmed `GAP` results; Experiment 17 remains a candidate.
+The v0.5 benchmark contains **17 implemented experiments**. Experiment 16 is the one remaining confirmed `GAP`; Experiments 15 and 17 are `BLOCKS` after the v0.5-C architectural fix.
 
-### Confirmed Gap — Experiment 15
+### Resolved — Experiment 15 (v0.5-C)
 
-A direct/non-delegated request with both `InvocationStore` and `ToolRegistry` configured can currently skip both:
+Before v0.5-C, a direct/non-delegated request with both `InvocationStore` and `ToolRegistry` configured could skip both the strong invocation/tool check (gated on `if request.delegation_chain:`) and the weak tool check (skipped when an invocation store exists). Policy decided alone — `ALLOW`.
 
-- strong invocation/tool verification, because that path is inside the delegated-request branch; and
-- weak tool verification, because weak mode is skipped whenever an invocation store exists.
-
-The benchmark currently reproduces:
+The v0.5-C fix decouples the invocation-store check from the delegation-chain check. All requests now require a canonical `InvocationRecord` when an invocation store is configured. Direct requests without an `invocation_id` are denied immediately:
 
 ```text
 non-delegated request
 InvocationStore configured
 ToolRegistry configured
-unregistered substitute tool
+no invocation_id
         |
         v
-ALLOW
+DENY (BLOCKS — v0.5-C)
 ```
-
-This is a confirmed v0.5 gap, not a theoretical concern.
 
 ### Confirmed Gap — Experiment 16
 
@@ -250,26 +244,28 @@ request #2 -> ALLOW
 request #3 -> ALLOW
 ```
 
-The benchmark therefore establishes the current contract:
+The benchmark establishes the current contract:
 
 > Ruhusa does not currently enforce one-shot invocation semantics.
 
-Whether Ruhusa should add `consume()`-style semantics or explicitly delegate duplicate-side-effect protection to an idempotent execution layer remains an architectural decision for v0.5.
+Duplicate-side-effect protection is an execution-layer responsibility. Whether to add `consume()`-style semantics is deferred to v0.6 research.
 
-### Remaining Candidate — Experiment 17
+### Resolved — Experiment 17 (v0.5-C)
 
-Strong tool verification currently runs when the canonical `InvocationRecord` contains a non-`None` `tool_id`.
+Before v0.5-C, strong tool verification ran only when `record.tool_id is not None`. A `None` `tool_id` in the invocation record silently skipped the registry check — policy decided alone.
 
-The remaining question is what Ruhusa should do when:
+The v0.5-C fix makes a missing `tool_id` fail-closed when a tool registry is configured:
 
 ```text
 InvocationStore configured
 ToolRegistry configured
-protected operation expected to be tool-mediated
 InvocationRecord.tool_id = None
+        |
+        v
+DENY (BLOCKS — v0.5-C)
 ```
 
-This case is identified but not yet represented by an executable experiment.
+This closes T16 from the threat model. The security contract is explicit: a configured registry requires tool identity in the canonical record.
 
 ## Documentation
 
@@ -380,7 +376,7 @@ Introduced adversarial replanning tests, discovered the fresh-grant remint gap, 
 
 ### v0.5 — Invocation Provenance and Tool Identity — in development
 
-Current work studies:
+v0.5 studied and resolved:
 
 - confused-deputy attacks
 - forged caller identity
@@ -388,11 +384,12 @@ Current work studies:
 - implementation spoofing
 - operation-bound invocation records
 - stale invocation replay
-- non-delegated strong-mode tool enforcement
-- exact invocation replay semantics
-- missing canonical tool identity
+- non-delegated strong-mode tool enforcement (Experiment 15 — BLOCKS v0.5-C)
+- missing canonical tool identity (Experiment 17 — BLOCKS v0.5-C)
 
-The milestone is not frozen while confirmed GAP results remain unresolved or intentionally unclassified as part of the final security contract.
+v0.5 confirmed gap (deferred to v0.6):
+
+- exact invocation replay semantics (Experiment 16 — GAP, one-shot semantics deferred)
 
 ## Research Direction
 
