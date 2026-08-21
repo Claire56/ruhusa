@@ -120,14 +120,58 @@ class AuthorizationRequest:
     task: TaskContext
     delegation_chain: tuple[DelegationGrant, ...] = ()
     context: Mapping[str, Any] = field(default_factory=dict)
-    invoking_principal_id: str | None = None
-    """Trusted runtime identity of the agent or principal that caused this
-    request to be made.  Must be populated by the orchestration layer, not
-    by the executing agent itself, so that it carries provenance guarantees
-    equivalent to those established for delegation chains in v0.4.
+    invocation_id: str | None = None
+    """Opaque reference to an :class:`~ruhusa.invocations.InvocationRecord`
+    registered by the trusted orchestration layer.
 
-    When present and a delegation chain exists, Ruhusa enforces INV-17:
-    the invoking principal must equal the grantor of the leaf delegation grant.
+    When Ruhusa is configured with an
+    :class:`~ruhusa.invocations.InMemoryInvocationStore`, this field is
+    **required** and used for *strong* invocation provenance (INV-17): the
+    record in the store — not any field the executing agent supplies — is the
+    authoritative source of the invoking principal's identity.  Omitting this
+    field when a store is configured is a hard ``DENY``.
+
+    When no store is configured, ``invoking_principal_id`` is used instead
+    (weak / backward-compatible mode).
+    """
+
+    invoking_principal_id: str | None = None
+    """*Self-asserted* identity of the invoking principal.
+
+    .. warning::
+
+        This field is supplied by the executing agent through the
+        :class:`AuthorizationRequest` it constructs.  An attacker who controls
+        the agent can forge any value here.  For production deployments, prefer
+        the :class:`~ruhusa.invocations.InMemoryInvocationStore` + ``invocation_id``
+        flow (strong provenance) over relying on this field alone.
+
+    Used for INV-17 only when **no** invocation store is configured (weak
+    mode, backward-compatible).  When a store is configured, this field is
+    ignored — only the store's
+    :attr:`~ruhusa.invocations.InvocationRecord.invoking_principal_id` is
+    authoritative.
+    """
+
+    tool_id: str | None = None
+    """Logical name of the tool that will execute this action
+    (e.g. ``"billing_refund_tool"``).  Must be populated by the orchestration
+    layer; an executing agent must not supply its own ``tool_id``.
+
+    When Ruhusa is configured with a :class:`~ruhusa.tools.InMemoryToolRegistry`,
+    both ``tool_id`` and ``implementation_id`` are required.  Omitting either
+    field is treated as a tool-identity failure and results in ``DENY``.
+    """
+
+    implementation_id: str | None = None
+    """Content-addressed identity of the specific tool implementation
+    (e.g. ``"billing_refund_tool@v1.2.0-sha256:abc..."``).  Must be populated
+    by the orchestration layer and must match a registration in the
+    :class:`~ruhusa.tools.InMemoryToolRegistry`.
+
+    A logical tool name alone (``tool_id``) is insufficient — two implementations
+    may share the same name while differing in behaviour.  The pair
+    ``(tool_id, implementation_id)`` is the unit of trust enforced by INV-18.
     """
 
 
