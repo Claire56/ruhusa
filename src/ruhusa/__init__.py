@@ -1,7 +1,7 @@
 from .audit import AuditEvent, InMemoryAuditLog
 from .core import Ruhusa
 from .grants import InMemoryGrantStore
-from .invocations import InMemoryInvocationStore, InvocationRecord
+from .invocations import InMemoryInvocationStore, InvocationRecord, compute_arguments_digest
 from .models import (
     AuthorizationDecision,
     AuthorizationRequest,
@@ -35,4 +35,5 @@ __all__ = [
     "StaticPolicyStore",
     "TaskContext",
     "ToolRegistration",
+    "compute_arguments_digest",
 ]
