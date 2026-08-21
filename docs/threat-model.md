@@ -1,26 +1,24 @@
 # Ruhusa Threat Model
 
-**Document status:** Living threat model  
-**Current framework milestone:** v0.5 development  
+**Document status:** Living threat model for the current v0.5 line  
+**Current package version:** 0.5.0  
 **Frozen prior snapshot:** `docs/threat-model/v0.4.md`
 
 ---
 
 ## 1. Purpose
 
-This document describes the current trust model, attacker capabilities, security invariants, known threats, implemented controls, confirmed gaps, and unresolved research questions for Ruhusa.
+This document describes Ruhusa's current trust model, attacker capabilities, security invariants, tested threats, implemented controls, confirmed gaps, and known limitations.
 
-It is a living document while v0.5 is under development.
-
-When v0.5 is complete, this document should be copied to:
+When the v0.5 release is finalized, this content may be frozen as:
 
 ```text
 docs/threat-model/v0.5.md
 ```
 
-and that snapshot should remain frozen.
+The frozen snapshot should then remain unchanged.
 
-Ruhusa's central security principles are:
+Ruhusa's central principles are:
 
 > **The LLM may propose an action, but deterministic authorization logic outside the model decides whether it may execute.**
 
@@ -30,19 +28,19 @@ Ruhusa's central security principles are:
 
 ## 2. Security Objective
 
-Ruhusa aims to preserve authorization correctness even when an executing AI agent is compromised, hallucinating, prompt-injected, or otherwise willing to misrepresent authorization-relevant information.
+Ruhusa aims to preserve authorization correctness even when an executing AI agent is compromised, hallucinating, prompt-injected, or willing to misrepresent authorization-relevant information.
 
-The security objective is not to guarantee correct model reasoning.
+The framework does not attempt to guarantee correct model reasoning.
 
-The objective is to prevent unauthorized protected actions when those actions pass through the Ruhusa authorization boundary under the stated trust assumptions and through security checks that apply to the request configuration being evaluated.
+The objective is to prevent unauthorized protected actions when those actions pass through the Ruhusa authorization boundary under the stated trust assumptions.
 
 ---
 
 ## 3. Trust Boundary
 
-### Trusted components
+### Trusted Components
 
-The current research model treats the following as trusted when correctly configured:
+When correctly configured, the research model treats the following as trusted:
 
 - Ruhusa authorization core
 - deterministic policy configuration
@@ -54,7 +52,7 @@ The current research model treats the following as trusted when correctly config
 - trusted orchestration layer
 - `InMemoryAuditLog` for normal application operation
 
-### Untrusted components and inputs
+### Untrusted Components and Inputs
 
 The following may be attacker-controlled:
 
@@ -69,11 +67,11 @@ The following may be attacker-controlled:
 - resource
 - arguments
 - presented delegation objects
-- invocation identifiers known to an executing agent
+- known invocation identifiers
 
-The executing agent may know canonical identifiers and record contents. Security must not depend on those values being secret.
+Security does not depend on canonical identifiers or record contents remaining secret.
 
-The key assumption is that the executing agent cannot directly modify canonical grant, invocation, revocation, policy, or tool-registry state.
+The central trust assumption is that the executing agent cannot directly modify canonical grant, invocation, revocation, tool-registry, or policy state.
 
 ---
 
@@ -88,20 +86,20 @@ The benchmark attacker may:
 - present altered or fabricated grants
 - retry after denial
 - choose alternate delegation paths
-- replay known grant IDs
-- replay known invocation IDs
-- replay an invocation with the exact same operation
-- attempt direct/non-delegated execution paths
-- attempt to operate after revocation
-- induce a privileged agent to act as a confused deputy
-- exploit backend failure paths in an attempt to fail open
+- replay grant IDs
+- replay invocation IDs
+- replay an invocation for the exact same operation
+- attempt direct/non-delegated paths
+- attempt execution after revocation
+- induce privileged agents to act as confused deputies
+- attempt to exploit backend failures
 
 The attacker is not currently assumed to have:
 
 - arbitrary code execution inside the Ruhusa process
 - direct write access to trusted stores
 - control of the trusted orchestration layer
-- cryptographic compromise of the Python runtime or host
+- compromise of the host/runtime trust boundary
 
 ---
 
@@ -113,37 +111,35 @@ No matching policy yields `DENY`.
 
 ### INV-02 — Fail Closed
 
-If a required security check is reached but its authorization state cannot be evaluated safely, the request is denied.
-
-This invariant must not be confused with **complete mediation**. A check that is skipped because of request-path structure is not equivalent to a backend that failed closed.
+If a required authorization dependency cannot be safely evaluated, the request is denied.
 
 ### INV-03 — Delegation Origin
 
-The root of a delegation chain must be the task initiator.
+A delegation chain begins at the task initiator.
 
-### INV-04 — Delegation Identity Continuity
+### INV-04 — Identity Continuity
 
-The grantee of one hop must be the grantor of the next.
+Each delegation hop connects the prior grantee to the next grantor.
 
 ### INV-05 — No Privilege Amplification
 
-A child grant may narrow but not widen inherited authority.
+Delegated authority may remain equal or narrow; it may not widen.
 
 ### INV-06 — Task Binding
 
-Delegated authority is bound to the task for which it was issued.
+Delegated authority cannot be replayed into another task.
 
 ### INV-07 — Temporal Validity
 
-Tasks, grants, and strong-mode invocation records are subject to their respective time bounds.
+Tasks, grants, and invocation records are subject to their configured time bounds.
 
 ### INV-08 — Continuous Revocation
 
-A presented delegation chain containing a revoked grant is denied.
+A presented chain containing revoked authority is denied.
 
 ### INV-09 — Earlier Revocation Wins
 
-A revocation may become effective earlier but should not be moved later by a subsequent record.
+Revocation may become effective earlier, but a later update must not restore authority by moving revocation later.
 
 ### INV-10 — Scoped Actions
 
@@ -159,299 +155,318 @@ Security-relevant arguments must fit effective delegated constraints.
 
 ### INV-13 — Trusted Grant Provenance
 
-When a grant store is configured, structural grant validity is insufficient. The grant must have been registered through the trusted issuance boundary.
+When canonical grant verification is configured, structural grant validity alone is insufficient.
 
 ### INV-14 — Canonical Grant Integrity
 
-A presented grant must exactly match the canonical registered grant.
+Presented grant contents must match canonical issued grant contents.
 
 ### INV-15 — Grant Identity Immutability
 
-A registered grant identity cannot silently change meaning.
+A grant identity cannot silently change meaning.
 
 ### INV-16 — Auditability
 
-Authorization decisions are recorded for later reconstruction.
+Authorization decisions are recorded for reconstruction.
 
 ### INV-17 — Trusted Invocation Provenance
 
-In **strong delegated mode**, the canonical invocation record binds the immediate invoker, executing principal, task, and protected operation.
+When an invocation store is configured, canonical runtime provenance binds:
 
-Weak `invoking_principal_id` comparison is a compatibility consistency check, not authenticated provenance.
+- executing principal
+- task
+- action
+- resource
+- arguments
+- expiry
+
+For delegated requests, it additionally binds the immediate invoker to the leaf delegation grantor.
 
 ### INV-18 — Trusted Tool Execution Identity
 
-In **strong delegated mode with a tool registry and canonical tool identity present**, the tool identity used for authorization comes from canonical runtime provenance and must correspond to a trusted registered implementation authorized for the requested action.
+When a tool registry is configured, canonical runtime tool identity must be present, registered, and authorized for the requested action.
 
-Weak request-field tool verification is not authenticated execution provenance.
+Request-level tool identity claims do not override canonical runtime identity.
 
-Current benchmark evidence does **not** support extending INV-18 to direct/non-delegated strong-mode requests.
+### Explicit Non-Invariant — Exactly-Once Execution
 
-### No one-shot invocation invariant yet
+Ruhusa v0.5.0 does not claim that an invocation may authorize only once.
 
-Ruhusa currently has no invariant stating that a canonical `invocation_id` may authorize an operation only once.
-
-Experiment 16 confirms that exact replay remains possible.
+Experiment 16 confirms exact invocation replay remains possible.
 
 ---
 
 ## 6. Threat Catalog
 
-### T1 — Wrong action
+### T1 — Wrong Action
 
 An agent attempts an action outside delegated or policy scope.
 
-**Status:** blocked by existing scope/policy controls.  
+**Status:** `BLOCKS`  
 **Benchmark:** Experiment 4.
 
-### T2 — Wrong resource
+### T2 — Wrong Resource
 
-An agent applies an otherwise allowed action to an unauthorized resource.
+An agent targets an unauthorized resource.
 
-**Status:** blocked.  
+**Status:** `BLOCKS`  
 **Benchmark:** Experiment 5.
 
-### T3 — Confused deputy with truthful caller identity
+### T3 — Confused Deputy With Truthful Caller Identity
 
-A low-privilege agent induces a privileged agent to act, and the request truthfully reports the low-privilege invoker.
+A low-privilege agent induces a privileged agent to act and the request truthfully represents the low-privilege caller.
 
-**Weak-mode status:** blocked by invoker/leaf-grantor consistency.  
-**Strong-mode status:** blocked by canonical invocation provenance.
+**Status:** `BLOCKS`
 
-This is not equivalent to complete confused-deputy resistance in weak mode because caller identity can be forged.
+Weak mode provides only caller-consistency checking. It must not be interpreted as authenticated provenance because T5 remains possible.
 
-**Benchmark:** Experiment 3.
+### T4 — Missing Invoker
 
-### T4 — Missing invoker
+A delegated weak-mode request omits caller identity.
 
-A delegated request omits `invoking_principal_id` in weak mode.
+**Status:** `BLOCKS`
 
-**Status:** blocked; omission fails closed.  
-**Benchmark:** Experiment 6.
+### T5 — Forged Invoker in Weak Mode
 
-### T5 — Forged invoker in weak mode
+A compromised agent claims the legitimate leaf grantor as `invoking_principal_id`.
 
-A compromised agent forges `invoking_principal_id` to equal the legitimate leaf grantor.
-
-**Status:** confirmed gap in weak mode.  
+**Status:** `GAP — ALLOW`  
 **Benchmark:** Experiment 9.
 
-### T6 — Forged invoker in strong delegated mode
+### T6 — Forged Invoker With Canonical Provenance
 
-The same request-level forgery is attempted while a canonical invocation store is configured.
+The same request-level forgery is attempted while canonical invocation provenance is configured.
 
-**Status:** blocked because the self-asserted request field is not authoritative.  
+**Status:** `BLOCKS`  
 **Benchmark:** Experiment 10.
 
-### T7 — Tool substitution with no registry
+### T7 — Tool Substitution With No Registry
 
-A protected action is routed through an arbitrary implementation.
+A protected action is routed to an arbitrary implementation.
 
-**Status:** confirmed gap in no-registry configurations.  
+**Status:** `GAP`  
 **Benchmarks:** Experiments 1–2.
 
-### T8 — Unregistered tool substitution with weak registry
+### T8 — Openly Unregistered Tool in Weak Registry Mode
 
-The request openly identifies an unregistered substitute implementation.
+The request openly identifies an unregistered implementation.
 
-**Status:** blocked by `(tool_id, implementation_id)` registry membership.  
+**Status:** `BLOCKS`  
 **Benchmarks:** Experiments 7–8.
 
-This control only covers **openly unregistered identity claims**. It does not establish execution provenance and does not block T9.
+This does not protect against forged registered identity.
 
-### T9 — Forged registered tool identity in weak mode
+### T9 — Forged Registered Tool Identity in Weak Mode
 
-A compromised agent actually uses a substitute implementation but claims the identity of a registered implementation.
+The executing agent claims a trusted registered identity while actually using another implementation.
 
-**Status:** confirmed gap in weak registry mode.  
+**Status:** `GAP — ALLOW`  
 **Benchmark:** Experiment 11.
 
-### T10 — Forged tool identity in strong delegated mode
+### T10 — Forged Tool Identity With Canonical Runtime Provenance
 
-The request lies about tool identity, but the canonical invocation record identifies the actual resolved implementation.
+The request lies about tool identity, but the canonical invocation record identifies the actual implementation.
 
-**Status:** blocked when:
-- the request is delegated;
-- an invocation store is configured;
-- a tool registry is configured; and
-- the canonical invocation record carries tool identity.
-
+**Status:** `BLOCKS`  
 **Benchmark:** Experiment 12.
 
-### T11 — Operation substitution
+### T11 — Modified-Operation Invocation Replay
 
-An attacker reuses a legitimate invocation ID with a different action, resource, or arguments.
+A valid invocation ID is reused with a different action, resource, or arguments.
 
-**Status:** blocked in strong delegated mode through exact action/resource comparison and arguments digest.  
+**Status:** `BLOCKS`  
 **Benchmark:** Experiment 13.
 
-### T12 — Stale invocation replay
+### T12 — Stale Invocation Replay
 
-An invocation ID is replayed after its canonical record expires while the broader task may still be active.
+A canonical invocation is used after expiry.
 
-**Status:** blocked in strong delegated mode.  
+**Status:** `BLOCKS`  
 **Benchmark:** Experiment 14.
 
-### T13 — Backend failure as fail-open attack
+### T13 — Authorization Backend Failure
 
-An attacker causes a policy or security-state backend to fail.
+A required security backend fails during authorization.
 
-**Status:** relevant evaluated paths are intended to fail closed and are represented by unit tests.
+**Status:** evaluated paths fail closed.
 
-This does not imply that every security check is always reached for every request path.
+### T14 — Direct/Non-Delegated Strong-Mode Tool Bypass
 
-### T14 — Direct/non-delegated strong-mode tool bypass
+The original v0.5 path allowed a direct request to skip strong invocation/tool verification.
 
-A directly authorized request is evaluated while both an invocation store and tool registry are configured.
+**Original result:** `GAP — ALLOW`
 
-Current invocation/tool verification is inside the delegated-request path, while weak tool verification is skipped whenever an invocation store exists.
+v0.5-C moved canonical invocation verification outside the delegated-only path.
 
-**Status:** **confirmed GAP — `ALLOW`.**  
-**Benchmark:** Experiment 15 — `test_non_delegated_request_bypasses_strong_mode_tool_check`.
+**Current status:** `BLOCKS — DENY`  
+**Benchmark:** Experiment 15.
 
-This is a complete-mediation gap: the tool-verification control exists, but the direct request path can currently avoid it.
+This threat established that:
 
-### T15 — Exact same-operation invocation replay
+> **Fail-closed dependencies do not substitute for complete mediation.**
 
-An attacker reuses the same valid invocation ID with the exact same action, resource, and arguments.
+### T15 — Exact Same-Operation Invocation Replay
 
-Operation binding does not distinguish first use from repeated identical use.
+The same valid invocation ID is reused with the exact same action, resource, and arguments.
 
-**Status:** **confirmed GAP — repeated `ALLOW`.**  
-**Benchmark:** Experiment 16 — `test_exact_invocation_replay_is_not_prevented`.
+**Status:** `GAP — repeated ALLOW`  
+**Benchmark:** Experiment 16.
 
-The current implementation has no one-shot invocation consumption mechanism.
+This is an explicitly documented v0.5.0 limitation.
 
-The remaining design decision is whether:
-- Ruhusa should consume invocation records after successful authorization; or
-- exact duplicate protection is explicitly delegated to idempotent execution infrastructure.
+Ruhusa does not currently claim:
 
-Until that contract is frozen, Ruhusa must not claim replay resistance for identical operations.
+- one-shot authorization
+- exactly-once execution
+- atomic authorization + side effect
+- execution-layer idempotency
 
-### T16 — Missing canonical tool identity in strong mode
+### T16 — Missing Canonical Tool Identity
 
-A strong-mode invocation record contains no tool identity even though a tool registry is configured.
+A tool registry is configured but canonical runtime provenance contains no tool identity.
 
-Current strong tool verification is conditional on `record.tool_id is not None`.
+v0.5-C now treats required missing canonical tool identity as an authorization failure.
 
-**Status:** identified candidate; adversarial benchmark not yet added.
-
-The framework also lacks an independent statement that a particular protected operation *must* be tool-mediated, so the expected security contract still needs to be defined.
+**Status:** `BLOCKS — DENY`  
+**Benchmark:** Experiment 17.
 
 ---
 
 ## 7. Configuration Modes
 
-### No invocation store
+### Weak Mode
 
-Caller provenance is self-asserted.
+Without an invocation store:
 
-With no tool registry, tool identity is unchecked.
+- caller identity may be self-asserted
+- tool identity may be self-asserted
+- registry membership may catch openly unregistered identities
+- forged legitimate-looking identities remain possible
 
-With a tool registry, openly unregistered tools are blocked, but a compromised agent can forge a registered tool identity.
+Weak mode is not a trusted provenance guarantee.
 
-### Strong delegated mode
+### Strong Mode
 
-When an invocation store is configured and the request is delegated, canonical runtime provenance is checked for:
+With canonical invocation provenance:
 
-- invoker
-- executor
-- task
-- action
-- resource
-- arguments digest
-- expiry
+- executor is verified
+- task is verified
+- action is verified
+- resource is verified
+- arguments are verified
+- expiry is verified
+- delegated invoker is verified
+- canonical tool identity is verified when a registry is configured
 
-When a tool registry is also configured and the record contains tool identity, the canonical runtime tool pair is checked against the registry.
-
-This is the strongest currently implemented configuration for **delegated** requests.
-
-### Direct/non-delegated requests
-
-Experiment 15 confirms that the current strong-mode tool guarantee does not automatically apply to direct/non-delegated requests.
-
-When both `InvocationStore` and `ToolRegistry` are configured, such a request may currently bypass both the strong delegated tool check and the weak tool check.
-
-### Invocation reuse
-
-Operation binding prevents modified-operation substitution but does not provide one-shot use.
-
-Experiment 16 confirms exact invocation replay.
+Strong invocation verification applies to direct and delegated requests.
 
 ---
 
-## 8. Fail-Closed Behavior
+## 8. Complete Mediation
 
-The following evaluated failures result in `DENY`:
+Experiment 15 demonstrated that the existence of a strong security check is insufficient if some request paths do not execute it.
 
-- task expiry
+v0.5-C corrected this by applying canonical invocation verification independently of delegation.
+
+The general rule is:
+
+> **Every protected action requiring a security control must pass through that control.**
+
+---
+
+## 9. Invocation Replay Semantics
+
+Operation binding protects against substitution:
+
+```text
+recorded refund 250
+replayed refund 500
+        |
+        v
+DENY
+```
+
+but not identical replay:
+
+```text
+recorded refund 250
+replayed refund 250
+        |
+        v
+ALLOW
+```
+
+Therefore v0.5.0 provides operation-bound provenance, not one-shot or exactly-once semantics.
+
+---
+
+## 10. Fail-Closed Behavior
+
+The following evaluated failures deny authorization:
+
+- expired task
 - invalid delegation
-- missing/unknown strong-mode invocation ID for delegated requests
-- invocation-store exceptions
-- tool-registry exceptions when the registry check is reached
-- grant-store exceptions
-- revocation-store exceptions
-- policy-evaluation exceptions
+- missing/unknown required invocation record
+- invocation-store exception
+- missing required canonical tool identity
+- untrusted tool implementation
+- tool-registry exception
+- grant-store exception
+- revocation-store exception
+- policy exception
 - no matching policy
 
-Fail-closed behavior improves authorization integrity at the cost of availability.
+Fail closed protects failure paths.
 
-However:
+Complete mediation ensures the relevant security path is actually reached.
 
-> **Fail closed does not substitute for complete mediation.**
-
-Experiment 15 demonstrates that a skipped security path may authorize even though the underlying security components themselves would fail closed if called.
+Both properties are required.
 
 ---
 
-## 9. Revocation Semantics
+## 11. Revocation
 
 Revocation is grant-scoped.
 
 Every grant presented in a delegation chain is checked.
 
-A request containing a revoked ancestor is denied.
+A chain containing a revoked grant is denied.
 
-Ruhusa does not currently maintain automatic descendant revocation. Child grants are not independently marked revoked solely because their parent was revoked.
+Ruhusa does not yet maintain automatic descendant revocation.
 
 ---
 
-## 10. Audit Model
+## 12. Audit
 
 Authorization decisions are recorded in a hash-chained in-memory audit log.
 
-The current audit mechanism is not independently signed or externally anchored.
+The audit chain is not independently signed or externally anchored.
 
 It should not be described as tamper-proof.
 
-The threat model assumes normal application control over the audit store; direct host/process compromise is out of scope.
+---
+
+## 13. Known Limitations
+
+Ruhusa v0.5.0 does not provide:
+
+- production-grade persistent authorization stores
+- cryptographic principal identity
+- cryptographic tool attestation
+- automatic descendant revocation
+- one-shot invocation consumption
+- exactly-once execution
+- atomic authorization + external side effect
+- durable human approval
+- comprehensive information-flow authorization
+- protection from trusted-orchestrator compromise
+- independently anchored audit evidence
+
+Weak mode additionally remains vulnerable to self-asserted caller and tool identity forgery.
 
 ---
 
-## 11. Known Limitations
-
-Current limitations include:
-
-- in-memory security state
-- grant store remains configuration-dependent
-- weak caller identity is forgeable
-- weak tool identity is forgeable
-- no cryptographic agent identity
-- no cryptographic tool attestation
-- no atomic authorize-and-execute transaction
-- no automatic descendant revocation
-- no one-shot invocation consumption
-- direct/non-delegated strong-mode tool bypass confirmed by Experiment 15
-- exact identical invocation replay confirmed by Experiment 16
-- missing canonical tool identity behavior not yet benchmarked
-- no complete durable approval workflow
-- no comprehensive information-flow authorization
-- trusted-orchestrator compromise outside current guarantee
-- audit chain not externally anchored
-
----
-
-## 12. Out of Scope
+## 14. Out of Scope
 
 The current framework does not claim to solve:
 
@@ -460,39 +475,37 @@ The current framework does not claim to solve:
 - content moderation
 - malware detection
 - model training security
-- host or interpreter compromise
-- network-layer security
+- host/runtime compromise
+- network security
 - credential storage
 - full IAM
 - distributed consensus
-- production high availability
+- production availability
 - sandbox escape
 - comprehensive data-flow control
-- cryptographic workload identity
 
 ---
 
-## 13. Security Testing Strategy
+## 15. Security Testing Strategy
 
-Ruhusa uses two complementary categories.
+Ruhusa combines:
 
-### Invariant tests
+### Invariant Tests
 
-Verify direct properties such as:
+Examples:
 
 - default deny
 - task binding
 - revocation
 - scope attenuation
-- canonical grant matching
-- fail-closed errors
+- canonical grant integrity
+- fail-closed security backends
 
-### Adversarial workflow tests
+### Adversarial Workflow Tests
 
-Model attacker adaptation:
+Examples:
 
 - delegation after denial
-- alternate delegation paths
 - fresh-grant remint
 - cross-task replay
 - confused deputy
@@ -501,79 +514,103 @@ Model attacker adaptation:
 - tool identity forgery
 - operation substitution
 - stale invocation replay
-- non-delegated strong-mode bypass
-- exact invocation replay
+- complete-mediation bypass
+- exact replay
+- missing canonical tool identity
 
 See `docs/attack-benchmarks.md`.
 
 ---
 
-## 14. Current v0.5 Release Gate
+## 16. v0.5.0 Validation Baseline
 
-v0.5 should not be frozen until:
+The release candidate completed:
 
 ```text
-existing v0.5 benchmark suite                 green
-Experiment 15 gap                             resolved or explicitly accepted
-exact replay contract from Experiment 16      explicitly decided and documented
-Experiment 17                                 tested / contract established
-architecture docs                             aligned
-attack benchmark docs                         aligned
-living threat model                           aligned
-package version                               bumped in release commit
-frozen v0.5 threat model                      created
+uv run ruff format .
+27 files left unchanged
+
+uv run ruff check .
+All checks passed!
+
+uv run pytest
+91 passed
+
+uv build
+dist/ruhusa-0.5.0.tar.gz
+dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
-The package remains `0.3.0` during active v0.5 development.
+Experiment status:
+
+```text
+Experiment 15 -> BLOCKS
+Experiment 16 -> GAP / documented limitation
+Experiment 17 -> BLOCKS
+```
 
 ---
 
-## 15. Research Position
+## 17. v0.5 Release Boundary
 
-Ruhusa should not claim novelty merely for default deny, revocation, task binding, least privilege, or policy enforcement. Those are foundational controls.
+The v0.5 security contract intentionally includes the exact-replay limitation.
+
+The release does not need to claim exactly-once execution in order to be internally consistent.
+
+Future research can investigate:
+
+- authorization consumption
+- idempotency keys
+- authorization/execution atomicity
+- retry semantics
+- concurrency
+- TOCTOU
+
+---
+
+## 18. Research Position
+
+Ruhusa should not claim novelty merely for default deny, revocation, least privilege, task binding, or deterministic policy enforcement.
 
 The broader research question is:
 
 > **Under what workflow transformations does authorization cease to represent the authority originally delegated by a principal, and what runtime invariants are required to preserve that authority across delegation, revocation, replanning, concurrency, tool invocation, and information propagation?**
 
-The benchmark evidence suggests that a recurring failure mode is loss of provenance or mediation as authority crosses workflow boundaries.
-
-v0.5 now demonstrates two distinct classes of residual risk even after trusted provenance is introduced:
+The v0.5 experiments identify three related but distinct concerns:
 
 ```text
-provenance control exists
-but request path skips it
-        -> Experiment 15
+identity claim
+    !=
+trusted provenance
 
-provenance binds operation
-but invocation remains reusable
-        -> Experiment 16
+trusted security control
+    !=
+complete mediation
+
+operation-bound provenance
+    !=
+execution uniqueness
 ```
 
-These findings broaden the research problem from provenance alone toward **complete mediation and authority lifecycle semantics**.
-
-The long-term objective is therefore not only:
-
-> Is this action allowed?
-
-but also:
-
-> Has the authority exercised by this action remained valid, correctly mediated, and appropriately bounded throughout every security-relevant transformation that produced it?
+This expands the research from static authorization toward preservation of authority across the lifecycle of an agentic workflow.
 
 ---
 
-## 16. Maintenance Rule
+## 19. Maintenance Rule
 
-A control should not be documented as a security guarantee until:
+A security control should not be documented as a guarantee until:
 
 1. the threat is stated;
 2. the trust assumptions are explicit;
 3. the control is implemented; and
-4. an appropriate executable test or experiment supports the claim.
+4. executable evidence supports the claim.
 
-A confirmed `GAP` should remain visible until it is either:
+A `GAP` should remain visible until it is either mitigated or explicitly accepted as part of the security contract.
 
-- mitigated and re-tested; or
-- explicitly accepted as part of the documented security contract.
+After release, freeze this document as:
 
-When v0.5 is released, freeze this document as `docs/threat-model/v0.5.md`.
+```text
+docs/threat-model/v0.5.md
+```
+
+and do not rewrite that historical snapshot.
