@@ -180,9 +180,9 @@ The current test module documents **sixteen implemented experiments** (Experimen
 | 12 | Same forged tool identity with canonical runtime record | strong delegated mode + registry | `BLOCKS` — `DENY` | `test_forged_tool_identity_blocked_by_invocation_store` |
 | 13 | Reuse invocation ID with modified arguments | strong delegated mode | `BLOCKS` — `DENY` | `test_operation_substitution_blocked_by_arguments_digest` |
 | 14 | Replay expired invocation record | strong delegated mode | `BLOCKS` — `DENY` | `test_stale_invocation_record_is_denied` |
-| 15 | Non-delegated request bypasses strong-mode tool check | strong mode, no chain | `GAP` — `ALLOW` | `test_non_delegated_request_bypasses_strong_mode_tool_check` |
+| 15 | Non-delegated request bypasses strong-mode tool check | strong mode, no chain | `BLOCKS (v0.5-C)` — `DENY` | `test_non_delegated_request_bypasses_strong_mode_tool_check` |
 | 16 | Exact same-operation invocation replay | strong delegated mode | `GAP` — `ALLOW` | `test_exact_invocation_replay_is_not_prevented` |
-| 17 | Invocation record with `tool_id=None` skips tool verification | strong mode + registry | candidate — not yet benchmarked | — |
+| 17 | Invocation record with `tool_id=None` skips tool verification | strong mode + registry | `BLOCKS (v0.5-C)` — `DENY` | `test_missing_canonical_tool_identity_is_denied` |
 
 ---
 
@@ -449,30 +449,29 @@ This distinguishes task lifetime from invocation lifetime.
 
 ---
 
-# Part III — Open v0.5 Benchmark Cases
+# Part III — v0.5-C Resolutions and Remaining GAP
 
 ## 20. Experiment 15 — Non-Delegated Strong-Mode Tool Bypass
 
-**Status:** running GAP benchmark — `test_non_delegated_request_bypasses_strong_mode_tool_check`
+**Status:** `BLOCKS (v0.5-C)` — `test_non_delegated_request_bypasses_strong_mode_tool_check`
 
-**Result:** `GAP` — `ALLOW`
+**Result:** `BLOCKS` — `DENY`
 
-Strong invocation verification runs only inside `if request.delegation_chain:`, so it is skipped for non-delegated requests. Weak tool verification runs only when `tool_registry is configured AND invocation_store is not configured`, so it is also skipped when an InvocationStore is present.
+**Historical GAP:** Before v0.5-C, strong invocation verification ran only inside `if request.delegation_chain:`, so non-delegated requests skipped it. Weak tool verification was also skipped when an InvocationStore was present. Policy decided alone — `ALLOW`.
 
-A direct/non-delegated request in a configuration with both stores skips both paths. Policy decides alone.
+**v0.5-C fix:** The `if self.invocation_store is not None:` block now applies to all requests regardless of delegation. Only the `invoker == leaf-grantor` check remains inside `if request.delegation_chain:`. Non-delegated requests without an `invocation_id` fail immediately; those with one must pass all canonical record checks including tool identity.
 
 ```text
 InvocationStore configured
 ToolRegistry configured
 delegation_chain = ()
-principal directly allowed by policy
-substitute tool (unregistered implementation_id)
+no invocation_id supplied
         |
         v
-Ruhusa authorizes without verifying tool identity → ALLOW (GAP)
+Ruhusa requires canonical InvocationRecord for all requests → DENY (BLOCKS)
 ```
 
-The benchmark confirms the gap. The architectural decision — whether non-delegated direct calls must also pass tool verification — is an open v0.5 question. See `docs/threat-model.md` T14.
+See `docs/threat-model.md` T14.
 
 ---
 
@@ -495,29 +494,30 @@ request #2 → ALLOW  (GAP)
 request #3 → ALLOW
 ```
 
-The benchmark establishes the current contract: Ruhusa does not enforce one-shot invocation semantics. Duplicate-side-effect prevention is currently an execution-layer responsibility. The architectural decision — whether to add `consume()` to `InvocationStore` — is an open v0.5 question. See `docs/threat-model.md` T15.
+The benchmark establishes the current contract: Ruhusa does not enforce one-shot invocation semantics. Duplicate-side-effect prevention is currently an execution-layer responsibility. Whether to add `consume()` to `InvocationStore` is deferred to v0.6 research. See `docs/threat-model.md` T15.
 
 ---
 
-## 22. Candidate Experiment 17 — Missing Canonical Tool Identity
+## 22. Experiment 17 — Missing Canonical Tool Identity
 
-**Status:** identified; test not yet added.
+**Status:** `BLOCKS (v0.5-C)` — `test_missing_canonical_tool_identity_is_denied`
 
-Strong tool verification currently executes when the canonical invocation record contains a non-`None` `tool_id`.
+**Result:** `BLOCKS` — `DENY`
 
-Candidate case:
+**Historical candidate:** Before v0.5-C, strong tool verification was conditional on `record.tool_id is not None`, so a `None` `tool_id` in the invocation record silently skipped the check. Policy decided alone — `ALLOW`.
+
+**v0.5-C fix:** When a tool registry is configured and the canonical record carries `tool_id=None`, the request is denied fail-closed before the registry is consulted. The security contract is explicit: a configured registry is a declared security requirement, and absent tool identity in the record is an authorization failure.
 
 ```text
 InvocationStore configured
 ToolRegistry configured
-protected operation is tool-mediated
 InvocationRecord.tool_id = None
         |
         v
-Should Ruhusa fail closed?
+Ruhusa: tool identity required when registry configured → DENY (BLOCKS)
 ```
 
-The framework currently lacks an independent "this operation must be tool-mediated" requirement. The test should clarify the desired invariant.
+The test covers both delegated and non-delegated requests, confirming that the fail-closed guard applies to all requests when a registry is configured. See `docs/threat-model.md` T16.
 
 ---
 
@@ -577,7 +577,8 @@ Executable benchmarks currently cover:
 - stale invocation replay
 - wrong action
 - wrong resource
-- non-delegated tool-verification bypass (GAP)
+- non-delegated tool-verification bypass (BLOCKS — v0.5-C)
+- missing canonical tool identity (BLOCKS — v0.5-C)
 - exact same-operation invocation replay (GAP)
 
 The presence of a category does not imply exhaustive coverage of every variant.
@@ -586,7 +587,7 @@ The presence of a category does not imply exhaustive coverage of every variant.
 
 ## 25. Known Benchmark Gaps
 
-In addition to Candidate Experiment 17, future benchmark areas include:
+Experiment 17 has been benchmarked and blocked. Remaining future benchmark areas include:
 
 - TOCTOU between authorization and execution
 - concurrent revocation
