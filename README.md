@@ -211,11 +211,16 @@ See `docs/architecture.md` for the detailed architecture and current limitations
 
 ## Known v0.5 Research Questions
 
-v0.5 is not frozen yet. Current code/document review has identified additional cases that should be benchmarked before the milestone is released:
+v0.5 is not frozen yet. Two cases have been benchmarked and confirmed as gaps; one remains a candidate.
 
-- strong-mode tool verification for non-delegated/directly authorized requests
-- exact same-operation replay of a valid `invocation_id`
-- strong-mode behavior when a canonical invocation record omits tool identity while a tool registry is configured
+**Confirmed gaps (running GAP benchmarks):**
+
+- **Experiment 15 — Non-delegated strong-mode tool bypass:** when both an invocation store and tool registry are configured, a request with an empty `delegation_chain` bypasses all tool verification. Current result: `GAP / ALLOW`. Architectural decision pending.
+- **Experiment 16 — Exact same-operation invocation replay:** the invocation store has no one-shot consumption semantics. The same `invocation_id` with identical action, resource, and arguments is accepted on every presentation. Current result: `GAP / ALLOW`. Current design delegates duplicate-side-effect prevention to the execution layer.
+
+**Remaining candidate:**
+
+- **Experiment 17 — Missing canonical tool identity:** if a canonical invocation record carries `tool_id=None`, strong tool verification is skipped even when a registry is configured. Not yet benchmarked.
 
 These are open research cases, not claimed protections.
 

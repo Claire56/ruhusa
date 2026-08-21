@@ -724,19 +724,25 @@ The principle is:
 
 ## 23. Current Open Architecture Questions
 
-Before v0.5 is released, the following cases should be represented by adversarial tests:
+### Direct/non-delegated strong-mode tool verification — confirmed gap
 
-### Direct/non-delegated strong-mode tool verification
+**Experiment 15 result: `GAP / ALLOW`.**
 
-Does a directly authorized principal bypass strong tool checks when both an invocation store and tool registry are configured?
+A directly authorized principal with an empty `delegation_chain` bypasses all strong-mode checks when both an invocation store and tool registry are configured. Strong invocation verification runs only inside `if request.delegation_chain:`, and weak tool verification is skipped when an invocation store exists. Both paths are missed.
 
-### Exact invocation replay
+The architectural decision — whether non-delegated calls must also pass tool verification — is unresolved. This is documented as a gap, not a guarantee.
 
-Operation binding blocks *modified* replay, but the invocation store currently has no one-shot consumption semantics. Should an exact same-operation replay be allowed, denied, or delegated to idempotency controls in the execution layer?
+### Exact invocation replay — confirmed gap
 
-### Missing strong-mode tool identity
+**Experiment 16 result: `GAP / ALLOW`.**
 
-If a tool registry is configured but the canonical invocation record contains no tool identity, should the protected operation fail closed?
+Operation binding (Experiment 13) blocks replay with a *modified* operation. It does not block replay of an *identical* operation. The invocation store has no one-shot consumption semantics; the same `invocation_id` with identical action, resource, and arguments is accepted on every presentation. Current design delegates duplicate-side-effect prevention to the execution layer. The architectural decision — whether to add `consume()` semantics to `InvocationStore` — is unresolved.
+
+### Missing strong-mode tool identity — remaining candidate
+
+**Experiment 17: not yet benchmarked.**
+
+If a tool registry is configured but the canonical invocation record contains `tool_id=None`, strong tool verification is currently skipped. Whether the protected operation should fail closed in this case is an open design question.
 
 These are intentionally documented as unresolved research questions rather than security guarantees.
 
@@ -829,8 +835,9 @@ Current limitations include:
 - no complete information-flow authorization
 - no durable human-approval workflow
 - trusted-orchestrator compromise is outside the current guarantee
-- direct/non-delegated strong-mode tool enforcement is not yet benchmarked
-- canonical missing-tool behavior in strong mode is not yet benchmarked
+- direct/non-delegated strong-mode tool bypass confirmed as gap (Experiment 15 — `GAP / ALLOW`; architectural decision pending)
+- exact same-operation invocation replay confirmed as gap (Experiment 16 — `GAP / ALLOW`; execution-layer idempotency assumed)
+- canonical missing-tool behavior in strong mode not yet benchmarked (Experiment 17 candidate)
 
 ---
 

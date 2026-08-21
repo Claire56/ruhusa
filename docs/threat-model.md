@@ -283,25 +283,27 @@ An attacker causes a policy or security-state backend to fail.
 
 A directly authorized request is evaluated while both an invocation store and tool registry are configured.
 
-Current invocation-store verification is inside the delegated-request path, while weak tool verification is skipped when an invocation store exists.
+Current invocation-store verification is inside the delegated-request path, while weak tool verification is skipped when an invocation store exists. Both paths miss non-delegated requests.
 
-**Status:** open, identified by code/document review; adversarial benchmark not yet added.
+**Status:** confirmed gap; Experiment 15 — `GAP / ALLOW`. Architectural decision on non-delegated tool verification is pending.  
+**Benchmark:** Experiment 15 (`test_non_delegated_request_bypasses_strong_mode_tool_check`).
 
 ### T15 — Exact same-operation invocation replay
 
 An attacker reuses the same valid invocation ID with the exact same action, resource, and arguments.
 
-Operation binding does not distinguish first use from repeated identical use.
+Operation binding (T11/Experiment 13) blocks replay with a *modified* operation. It does not distinguish first use from repeated identical use of the same operation.
 
-**Status:** open design/benchmark question. No one-shot consumption mechanism currently exists.
+**Status:** confirmed gap; Experiment 16 — `GAP / ALLOW`. No one-shot consumption mechanism exists. Current design delegates duplicate-side-effect prevention to the execution layer. Architectural decision on `consume()` semantics is pending.  
+**Benchmark:** Experiment 16 (`test_exact_invocation_replay_is_not_prevented`).
 
 ### T16 — Missing canonical tool identity in strong mode
 
 A strong-mode invocation record contains no tool identity even though a tool registry is configured.
 
-Current strong tool verification is conditional on `record.tool_id is not None`.
+Current strong tool verification is conditional on `record.tool_id is not None`. A record with `tool_id=None` skips tool verification entirely.
 
-**Status:** open design/benchmark question.
+**Status:** open design/benchmark question; Experiment 17 candidate, not yet benchmarked. Whether the protected operation should fail closed in this case is unresolved.
 
 ---
 
@@ -392,8 +394,9 @@ Current limitations include:
 - no atomic authorize-and-execute transaction
 - no automatic descendant revocation
 - no one-shot invocation consumption
-- direct/non-delegated strong-mode tool enforcement not yet benchmarked
-- missing canonical tool identity behavior not yet benchmarked
+- direct/non-delegated strong-mode tool bypass confirmed as gap (T14 / Experiment 15 — `GAP / ALLOW`)
+- exact same-operation invocation replay confirmed as gap (T15 / Experiment 16 — `GAP / ALLOW`)
+- missing canonical tool identity behavior not yet benchmarked (T16 / Experiment 17 candidate)
 - no complete durable approval workflow
 - no comprehensive information-flow authorization
 - trusted-orchestrator compromise outside current guarantee
