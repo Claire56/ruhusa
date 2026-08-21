@@ -150,9 +150,7 @@ class InMemoryInvocationStore:
         registered, enforcing immutability of the store.
         """
         if record.invocation_id in self._records:
-            raise ValueError(
-                f"invocation {record.invocation_id!r} is already registered"
-            )
+            raise ValueError(f"invocation {record.invocation_id!r} is already registered")
         self._records[record.invocation_id] = record
         return record
 

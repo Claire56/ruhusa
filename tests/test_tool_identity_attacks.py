@@ -344,7 +344,7 @@ def test_completely_different_action_is_denied() -> None:
 
     req = make_request(
         principal_id="billing-agent",
-        action="delete_account",   # not in policy or delegated scope
+        action="delete_account",  # not in policy or delegated scope
         resource="customer:123:billing",
         arguments={"amount": 250},
         task=task,
@@ -377,7 +377,7 @@ def test_different_resource_is_denied() -> None:
     req = make_request(
         principal_id="billing-agent",
         action="issue_refund",
-        resource="customer:456:billing",   # outside authorized prefix
+        resource="customer:456:billing",  # outside authorized prefix
         arguments={"amount": 250},
         task=task,
     )
@@ -578,6 +578,7 @@ def test_same_tool_name_different_implementation_blocked_by_registry() -> None:
     assert attacker_decision.effect == DecisionEffect.DENY
     assert "not in the trusted registry" in attacker_decision.reason
 
+
 # ---------------------------------------------------------------------------
 # Experiment 9: Forged invoking_principal_id bypasses weak provenance check
 #
@@ -689,7 +690,7 @@ def test_forged_invoking_principal_blocked_by_invocation_store() -> None:
         task=task,
         delegation_chain=(grant,),
         invoking_principal_id="user-1",  # forged but ignored in strong mode
-        invocation_id=None,              # missing → DENY
+        invocation_id=None,  # missing → DENY
     )
     decision_a = gate.authorize(forged_no_id, now=NOW)
     assert decision_a.effect == DecisionEffect.DENY
@@ -732,7 +733,7 @@ def test_forged_invoking_principal_blocked_by_invocation_store() -> None:
     store.register(
         InvocationRecord(
             invocation_id="inv-legit-001",
-            invoking_principal_id="user-1",     # authenticated by orchestrator
+            invoking_principal_id="user-1",  # authenticated by orchestrator
             executing_principal_id="billing-agent",
             task_id=task.task_id,
             action="issue_refund",
@@ -808,7 +809,7 @@ def test_forged_tool_identity_bypasses_weak_registry_check() -> None:
         arguments={"amount": 250},
         task=task,
         delegation_chain=(grant,),
-        invoking_principal_id="user-1",     # forged — actual caller is low-privilege-agent
+        invoking_principal_id="user-1",  # forged — actual caller is low-privilege-agent
         tool_id="billing_refund_tool",
         implementation_id=TRUSTED_IMPL_ID,  # forged — actual impl is SUBSTITUTE_IMPL_ID
     )
@@ -881,7 +882,7 @@ def test_forged_tool_identity_blocked_by_invocation_store() -> None:
             resource="customer:123:billing",
             arguments_digest=compute_arguments_digest({"amount": 250}),
             tool_id="billing_refund_tool",
-            implementation_id=SUBSTITUTE_IMPL_ID,   # attacker's actual tool
+            implementation_id=SUBSTITUTE_IMPL_ID,  # attacker's actual tool
             recorded_at=NOW,
             expires_at=NOW + timedelta(minutes=5),
         )
@@ -1076,7 +1077,7 @@ def test_stale_invocation_record_is_denied() -> None:
         action="issue_refund",
         resource="customer:123:billing",
         arguments={"amount": 250},
-        task=task,          # task is still active (expires in 1 hour)
+        task=task,  # task is still active (expires in 1 hour)
         delegation_chain=(grant,),
         invocation_id="inv-stale-001",
     )
