@@ -85,6 +85,14 @@ If required authorization state cannot be safely verified, Ruhusa denies the act
 
 Weak pre-1.0 modes may inspect self-asserted identity fields for compatibility. Those modes must remain explicitly distinguishable from trusted runtime provenance.
 
+### 2.7 Operation Binding Is Not One-Shot Consumption
+
+Binding an invocation record to a specific action, resource, and argument digest prevents **modified-operation replay**.
+
+It does not, by itself, prevent the exact same valid invocation from being authorized more than once.
+
+That distinction is now confirmed experimentally by Experiment 16.
+
 ---
 
 ## 3. Architectural Position
@@ -262,6 +270,8 @@ Audit every exit
 
 This order reflects the current code, not a normative requirement that future versions must retain exactly the same sequence.
 
+It also explains Experiment 15: strong invocation/tool verification is currently nested under `request.delegation_chain`, while weak tool verification is skipped whenever an invocation store exists.
+
 ---
 
 ## 7. Core Request Model
@@ -405,7 +415,7 @@ This detects missing or inconsistent caller claims.
 
 It does **not** authenticate the caller. A compromised executing agent can forge the field.
 
-### Strong mode
+### Strong delegated mode
 
 `InMemoryInvocationStore` contains canonical `InvocationRecord` objects created by the trusted orchestration layer.
 
@@ -476,7 +486,30 @@ strong tool check, when applicable
 
 Operation binding prevents a valid invocation reference from being reused for a *different* action, resource, or argument set.
 
-It does **not currently establish one-shot consumption**. Exact replay of the same invocation and same operation remains an open benchmark question.
+### Confirmed limitation: exact replay
+
+Experiment 16 confirms that operation binding does not establish one-shot consumption.
+
+The current `InMemoryInvocationStore` does not consume an invocation after authorization.
+
+Therefore:
+
+```text
+same invocation_id
+same action
+same resource
+same arguments
+        |
+        v
+repeated authorizations may ALLOW
+```
+
+This is now a confirmed behavior, not an untested question.
+
+The remaining architectural decision is whether Ruhusa should:
+
+1. add one-shot/consumable invocation semantics; or
+2. explicitly define exact replay/idempotency as an execution-layer responsibility.
 
 ---
 
@@ -528,13 +561,6 @@ does not distinguish a trusted implementation from a substitute implementation.
 
 and the actions that pair may perform.
 
-Example:
-
-```text
-tool_id = billing_refund_tool
-implementation_id = billing_refund_tool@v1.2.0-sha256:abc123
-```
-
 The implementation identifier is canonical application metadata. Ruhusa does not currently provide cryptographic executable attestation.
 
 ---
@@ -556,6 +582,8 @@ and verifies:
 This blocks an openly unregistered implementation.
 
 It does not prove that the claimed implementation actually executed. A compromised agent may claim a registered pair while using different code.
+
+Experiment 11 confirms that this forgery succeeds in weak mode.
 
 ---
 
@@ -586,19 +614,44 @@ trusted and allowed for action?
 
 Self-asserted request tool fields do not override the strong-mode record.
 
-### Current limitation: non-delegated strong mode
+### Confirmed gap: non-delegated strong-mode bypass
 
-Strong invocation verification currently runs inside the delegated-request path.
+Experiment 15 confirms that this protection is scoped to delegated requests in the current implementation.
 
-A direct/non-delegated request with both `InvocationStore` and `ToolRegistry` configured may therefore bypass both the strong invocation path and the weak registry path.
+With both stores configured:
 
-This is an **open v0.5 benchmark case**, not a claimed protection.
+```text
+InvocationStore configured
+ToolRegistry configured
+delegation_chain = ()
+principal directly allowed by policy
+unregistered substitute tool
+        |
+        v
+ALLOW
+```
 
-### Current limitation: missing canonical tool identity
+The reason is structural:
 
-Strong tool verification currently runs when a canonical invocation record contains a non-`None` `tool_id`.
+```text
+strong invocation/tool check
+    -> runs only inside delegated path
 
-The behavior for a supposedly tool-mediated operation whose canonical record omits tool identity should be explicitly benchmarked before v0.5 is frozen.
+weak tool check
+    -> runs only when no InvocationStore exists
+```
+
+Therefore a direct/non-delegated request can currently skip both checks.
+
+This is a confirmed v0.5 gap and should not be described as protected until the architecture is changed and the benchmark rerun.
+
+### Remaining candidate: missing canonical tool identity
+
+Strong tool verification currently executes when `record.tool_id is not None`.
+
+The behavior when a tool registry is configured but the canonical invocation record omits tool identity remains untested.
+
+That is Candidate Experiment 17.
 
 ---
 
@@ -616,7 +669,7 @@ Only resources inside the effective resource prefixes may be used.
 
 ### Argument scope
 
-Numeric and other supported argument constraints must remain inside effective delegated limits.
+Security-relevant argument constraints must remain inside effective delegated limits.
 
 v0.5 strengthens provenance; it does not replace these earlier controls.
 
@@ -638,7 +691,7 @@ REQUIRE_APPROVAL
 
 No matching rule results in `DENY`. Policy evaluation exceptions also result in `DENY`.
 
-The policy interface is separable from the authorization core so future adapters can integrate external PDPs such as OPA/Rego or AuthZEN-style systems.
+The policy interface is separable from the authorization core so future adapters can integrate external PDPs without moving authorization into LLM judgment.
 
 ---
 
@@ -652,7 +705,7 @@ Ruhusa does not yet provide a complete approval workflow. A production integrati
 
 ## 20. Audit
 
-`InMemoryAuditLog` records authorization decisions and returns an audit identifier.
+`InMemoryAuditLog` records authorization decisions.
 
 The current log is hash-chained.
 
@@ -699,6 +752,8 @@ Protected Tool/API
 
 Ruhusa authorizes. It does not itself guarantee that the caller correctly enforces the decision or that the external tool is idempotent.
 
+This distinction is especially relevant to Experiment 16: without one-shot invocation semantics, duplicate execution may require execution-layer idempotency unless Ruhusa's contract is strengthened.
+
 ---
 
 ## 22. Fail-Closed Behavior
@@ -720,31 +775,39 @@ The principle is:
 
 > **Availability failure must not silently become authorization success.**
 
+Fail-closed behavior applies only where the relevant check is actually reached. Experiment 15 demonstrates that a skipped security path is different from a failed security dependency.
+
 ---
 
-## 23. Current Open Architecture Questions
+## 23. Current v0.5 Gaps and Open Questions
 
-### Direct/non-delegated strong-mode tool verification — confirmed gap
+### Confirmed Gap — Experiment 15: direct/non-delegated strong-mode tool bypass
 
-**Experiment 15 result: `GAP / ALLOW`.**
+**Observed result:** `ALLOW`
 
-A directly authorized principal with an empty `delegation_chain` bypasses all strong-mode checks when both an invocation store and tool registry are configured. Strong invocation verification runs only inside `if request.delegation_chain:`, and weak tool verification is skipped when an invocation store exists. Both paths are missed.
+The current strong tool path does not cover direct/non-delegated requests when an invocation store is configured.
 
-The architectural decision — whether non-delegated calls must also pass tool verification — is unresolved. This is documented as a gap, not a guarantee.
+### Confirmed Gap — Experiment 16: exact invocation replay
 
-### Exact invocation replay — confirmed gap
+**Observed result:** repeated `ALLOW`
 
-**Experiment 16 result: `GAP / ALLOW`.**
+The current invocation model binds the operation but does not consume the invocation.
 
-Operation binding (Experiment 13) blocks replay with a *modified* operation. It does not block replay of an *identical* operation. The invocation store has no one-shot consumption semantics; the same `invocation_id` with identical action, resource, and arguments is accepted on every presentation. Current design delegates duplicate-side-effect prevention to the execution layer. The architectural decision — whether to add `consume()` semantics to `InvocationStore` — is unresolved.
+The remaining design decision is whether exact replay is:
 
-### Missing strong-mode tool identity — remaining candidate
+- an authorization-layer concern requiring one-shot invocation semantics; or
+- an execution-layer concern requiring idempotency/deduplication.
 
-**Experiment 17: not yet benchmarked.**
+### Candidate Experiment 17: missing canonical tool identity
 
-If a tool registry is configured but the canonical invocation record contains `tool_id=None`, strong tool verification is currently skipped. Whether the protected operation should fail closed in this case is an open design question.
+**Status:** identified, not yet tested.
 
-These are intentionally documented as unresolved research questions rather than security guarantees.
+If a tool registry is configured but the canonical invocation record omits tool identity, the framework should explicitly define whether the request:
+
+- fails closed; or
+- is treated as a legitimate non-tool-mediated operation.
+
+A benchmark should establish the contract.
 
 ---
 
@@ -776,6 +839,8 @@ v0.5  in development
       implementation identity
       operation-bound invocation records
       stale invocation rejection
+      confirmed non-delegated tool-verification gap
+      confirmed exact-invocation replay gap
 ```
 
 ---
@@ -816,9 +881,11 @@ v0.5  in development
 
 **INV-17 — Trusted invocation provenance.** In strong delegated mode, canonical runtime provenance binds invoker, executor, task, and protected operation.
 
-**INV-18 — Trusted tool execution identity.** In strong delegated mode with a registry, tool authorization uses runtime-observed canonical tool identity rather than self-asserted request fields.
+**INV-18 — Trusted tool execution identity.** In strong delegated mode with a registry and canonical tool identity present, tool authorization uses runtime-observed canonical tool identity rather than self-asserted request fields.
 
-The scope qualifiers on INV-17 and INV-18 are deliberate. v0.5 is still under active benchmark development.
+INV-17 and INV-18 are intentionally scoped. Current benchmark evidence does not support extending INV-18 to direct/non-delegated requests.
+
+There is not yet an invariant requiring one-shot invocation consumption.
 
 ---
 
@@ -832,12 +899,11 @@ Current limitations include:
 - no atomic authorization + external side effect
 - no automatic descendant-revocation graph
 - no one-shot invocation consumption
+- direct/non-delegated strong-mode tool bypass confirmed by Experiment 15
+- canonical missing-tool behavior not yet benchmarked
 - no complete information-flow authorization
 - no durable human-approval workflow
-- trusted-orchestrator compromise is outside the current guarantee
-- direct/non-delegated strong-mode tool bypass confirmed as gap (Experiment 15 — `GAP / ALLOW`; architectural decision pending)
-- exact same-operation invocation replay confirmed as gap (Experiment 16 — `GAP / ALLOW`; execution-layer idempotency assumed)
-- canonical missing-tool behavior in strong mode not yet benchmarked (Experiment 17 candidate)
+- trusted-orchestrator compromise outside the current guarantee
 
 ---
 
