@@ -1,7 +1,7 @@
 # Ruhusa Threat Model
 
-**Document status:** Living threat model (v0.5 frozen at `docs/threat-model/v0.5.md`)  
-**Current framework milestone:** v0.5 — released  
+**Document status:** Living threat model  
+**Current framework milestone:** v0.5 development  
 **Frozen prior snapshot:** `docs/threat-model/v0.4.md`
 
 ---
@@ -175,17 +175,17 @@ Authorization decisions are recorded for later reconstruction.
 
 ### INV-17 — Trusted Invocation Provenance
 
-In **strong mode** (invocation store configured), ALL requests — delegated and direct — must carry a canonical invocation record registered by the trusted orchestration layer. The record binds executor, task, action, resource, arguments digest, and expiry. For delegated requests the authenticated invoker must also match the leaf grant grantor.
+In **strong delegated mode**, the canonical invocation record binds the immediate invoker, executing principal, task, and protected operation.
 
 Weak `invoking_principal_id` comparison is a compatibility consistency check, not authenticated provenance.
 
 ### INV-18 — Trusted Tool Execution Identity
 
-When both an invocation store and a tool registry are configured, the canonical record must carry a non-`None` `tool_id`; a missing `tool_id` is fail-closed. Registered tool identity is verified from the record, not from the self-asserted request fields.
+In **strong delegated mode with a tool registry and canonical tool identity present**, the tool identity used for authorization comes from canonical runtime provenance and must correspond to a trusted registered implementation authorized for the requested action.
 
-INV-18 applies to **all** requests (delegated and direct) when an invocation store is configured; the v0.5-C architectural fix removed the earlier direct-request exemption.
+Weak request-field tool verification is not authenticated execution provenance.
 
-Weak request-field tool verification applies when a tool registry is configured and no invocation store is present, for all requests.
+Current benchmark evidence does **not** support extending INV-18 to direct/non-delegated strong-mode requests.
 
 ### No one-shot invocation invariant yet
 
@@ -304,12 +304,12 @@ This does not imply that every security check is always reached for every reques
 
 A directly authorized request is evaluated while both an invocation store and tool registry are configured.
 
-Before v0.5-C, invocation/tool verification was inside the delegated-request path while weak tool verification was skipped whenever an invocation store existed, leaving direct requests unchecked.
+Current invocation/tool verification is inside the delegated-request path, while weak tool verification is skipped whenever an invocation store exists.
 
-**Status:** **BLOCKS (v0.5-C) — `DENY`.**  
+**Status:** **confirmed GAP — `ALLOW`.**  
 **Benchmark:** Experiment 15 — `test_non_delegated_request_bypasses_strong_mode_tool_check`.
 
-The v0.5-C fix decouples the invocation-store check from the delegation-chain check. The `if self.invocation_store is not None:` block now applies to all requests. Direct requests without a canonical invocation_id are denied; requests with one must pass executor, task, operation, expiry, and tool-identity checks before policy is consulted.
+This is a complete-mediation gap: the tool-verification control exists, but the direct request path can currently avoid it.
 
 ### T15 — Exact same-operation invocation replay
 
@@ -332,12 +332,11 @@ Until that contract is frozen, Ruhusa must not claim replay resistance for ident
 
 A strong-mode invocation record contains no tool identity even though a tool registry is configured.
 
-Before v0.5-C, strong tool verification was conditional on `record.tool_id is not None`, so a `None` `tool_id` silently skipped the check.
+Current strong tool verification is conditional on `record.tool_id is not None`.
 
-**Status:** **BLOCKS (v0.5-C) — `DENY`.**  
-**Benchmark:** Experiment 17 — `test_missing_canonical_tool_identity_is_denied`.
+**Status:** identified candidate; adversarial benchmark not yet added.
 
-The v0.5-C fix makes a missing `tool_id` fail-closed: when a tool registry is configured and the canonical record carries `tool_id=None`, the request is denied before the registry is consulted. The security contract is now explicit: a configured registry is a declared security requirement, and absent tool identity in the record is an authorization failure.
+The framework also lacks an independent statement that a particular protected operation *must* be tool-mediated, so the expected security contract still needs to be defined.
 
 ---
 
@@ -351,10 +350,11 @@ With no tool registry, tool identity is unchecked.
 
 With a tool registry, openly unregistered tools are blocked, but a compromised agent can forge a registered tool identity.
 
-### Strong mode
+### Strong delegated mode
 
-When an invocation store is configured, canonical runtime provenance is checked for **all** requests — delegated and direct:
+When an invocation store is configured and the request is delegated, canonical runtime provenance is checked for:
 
+- invoker
 - executor
 - task
 - action
@@ -362,15 +362,15 @@ When an invocation store is configured, canonical runtime provenance is checked 
 - arguments digest
 - expiry
 
-For delegated requests, the authenticated invoker must also match the leaf grant grantor.
+When a tool registry is also configured and the record contains tool identity, the canonical runtime tool pair is checked against the registry.
 
-When a tool registry is also configured, the canonical runtime tool pair is checked against the registry. A missing `tool_id` in the record is fail-closed.
-
-This is the strongest currently implemented configuration. The v0.5-C fix extended the strong-mode guarantee from delegated requests to direct/non-delegated requests.
+This is the strongest currently implemented configuration for **delegated** requests.
 
 ### Direct/non-delegated requests
 
-After v0.5-C, direct requests are subject to the same invocation and tool-identity checks as delegated requests when an invocation store is configured. Experiment 15 (previously a confirmed GAP) now confirms BLOCKS.
+Experiment 15 confirms that the current strong-mode tool guarantee does not automatically apply to direct/non-delegated requests.
+
+When both `InvocationStore` and `ToolRegistry` are configured, such a request may currently bypass both the strong delegated tool check and the weak tool check.
 
 ### Invocation reuse
 
@@ -400,7 +400,7 @@ However:
 
 > **Fail closed does not substitute for complete mediation.**
 
-Experiment 15 previously demonstrated that a skipped security path could authorize even though the underlying security components themselves would fail closed if called. The v0.5-C fix resolved this for the invocation/tool path by decoupling the check from the delegation-chain condition.
+Experiment 15 demonstrates that a skipped security path may authorize even though the underlying security components themselves would fail closed if called.
 
 ---
 
@@ -441,7 +441,9 @@ Current limitations include:
 - no atomic authorize-and-execute transaction
 - no automatic descendant revocation
 - no one-shot invocation consumption
+- direct/non-delegated strong-mode tool bypass confirmed by Experiment 15
 - exact identical invocation replay confirmed by Experiment 16
+- missing canonical tool identity behavior not yet benchmarked
 - no complete durable approval workflow
 - no comprehensive information-flow authorization
 - trusted-orchestrator compromise outside current guarantee
@@ -511,10 +513,10 @@ See `docs/attack-benchmarks.md`.
 v0.5 should not be frozen until:
 
 ```text
-existing v0.5 benchmark suite                 green (91 tests)
-Experiment 15 gap                             resolved by v0.5-C
-exact replay contract from Experiment 16      explicitly decided — deferred to v0.6
-Experiment 17                                 tested and blocked by v0.5-C
+existing v0.5 benchmark suite                 green
+Experiment 15 gap                             resolved or explicitly accepted
+exact replay contract from Experiment 16      explicitly decided and documented
+Experiment 17                                 tested / contract established
 architecture docs                             aligned
 attack benchmark docs                         aligned
 living threat model                           aligned
@@ -541,11 +543,11 @@ v0.5 now demonstrates two distinct classes of residual risk even after trusted p
 ```text
 provenance control exists
 but request path skips it
-        -> Experiment 15 (resolved by v0.5-C)
+        -> Experiment 15
 
 provenance binds operation
 but invocation remains reusable
-        -> Experiment 16 (confirmed GAP — deferred to v0.6)
+        -> Experiment 16
 ```
 
 These findings broaden the research problem from provenance alone toward **complete mediation and authority lifecycle semantics**.
