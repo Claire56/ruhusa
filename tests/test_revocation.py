@@ -74,6 +74,7 @@ def request(
         arguments={"amount": amount},
         task=task(),
         delegation_chain=(delegation_grant,),
+        invoking_principal_id=delegation_grant.grantor_id,
     )
 
 

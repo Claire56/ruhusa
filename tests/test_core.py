@@ -84,6 +84,7 @@ def request(
         arguments={"amount": amount},
         task=task(),
         delegation_chain=chain,
+        invoking_principal_id=chain[-1].grantor_id if chain else None,
     )
 
 
@@ -191,6 +192,7 @@ def test_policy_exception_fails_closed() -> None:
         arguments={},
         task=task(),
         delegation_chain=chain,
+        invoking_principal_id="user-1",
     )
 
     decision = gate.authorize(malformed_request, now=NOW)

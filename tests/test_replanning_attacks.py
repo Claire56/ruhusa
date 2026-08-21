@@ -85,6 +85,7 @@ def make_request(
         arguments=arguments,
         task=task,
         delegation_chain=chain,
+        invoking_principal_id=chain[-1].grantor_id if chain else None,
     )
 
 

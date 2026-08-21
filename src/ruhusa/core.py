@@ -6,15 +6,23 @@ from datetime import UTC, datetime
 from .audit import InMemoryAuditLog
 from .delegation import validate_delegation_chain
 from .grants import InMemoryGrantStore
+from .invocations import InMemoryInvocationStore, compute_arguments_digest
 from .models import AuthorizationDecision, AuthorizationRequest, DecisionEffect
 from .policy import StaticPolicyStore
 from .revocation import InMemoryRevocationStore, RevocationRecord
+from .tools import InMemoryToolRegistry
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 class Ruhusa:
     """Deterministic authorization boundary for agent actions.
 
-    Security invariants in v0.3:
+    Security invariants:
     - deny by default
     - task must be active
     - delegation chain must be identity-continuous
@@ -26,8 +34,23 @@ class Ruhusa:
       of their contents
     - revoked authority must not authorize subsequent actions
     - action/resource/arguments must fit effective delegated scope
+    - INV-17: in strong mode (invocation store configured), all requests —
+      delegated and direct — must carry a canonical InvocationRecord registered
+      by the trusted orchestration layer; the record binds executor, task,
+      action, resource, arguments digest, and expiry; for delegated requests
+      the authenticated invoker must also match the leaf grant grantor; weak
+      mode (no store) checks the self-asserted invoking_principal_id for
+      delegated requests only
+    - INV-18 (strong mode): when both invocation store and tool registry are
+      configured, the canonical record must carry a non-None tool_id; a missing
+      tool_id is fail-closed; registered tool identity is verified from the
+      record, not from the self-asserted request fields; INV-18 (weak mode):
+      when a tool registry is configured and no invocation store is present,
+      tool_id and implementation_id from the request are checked for all
+      requests
     - policy evaluation failures deny the action
     - revocation-check failures deny the action
+    - tool-registry failures deny the action
     - every authorization decision is audited
     """
 
@@ -37,6 +60,8 @@ class Ruhusa:
         audit_log: InMemoryAuditLog | None = None,
         revocation_store: InMemoryRevocationStore | None = None,
         grant_store: InMemoryGrantStore | None = None,
+        tool_registry: InMemoryToolRegistry | None = None,
+        invocation_store: InMemoryInvocationStore | None = None,
     ) -> None:
         self.policy_store = policy_store or StaticPolicyStore()
         self.audit_log = audit_log or InMemoryAuditLog()
@@ -44,6 +69,8 @@ class Ruhusa:
             revocation_store if revocation_store is not None else InMemoryRevocationStore()
         )
         self.grant_store = grant_store
+        self.tool_registry = tool_registry
+        self.invocation_store = invocation_store
 
     def revoke_grant(
         self,
@@ -79,6 +106,248 @@ class Ruhusa:
                 request,
                 AuthorizationDecision(DecisionEffect.DENY, delegation.reason),
             )
+
+        # INV-17/INV-18: Invocation provenance and tool identity.
+        # When an InvocationStore is configured, ALL requests — delegated and direct —
+        # must carry a canonical InvocationRecord registered by the trusted orchestration
+        # layer (complete mediation).  The executing agent cannot forge or modify the
+        # canonical record.
+        #
+        # Executor, task, operation binding, expiry, and tool identity apply to every
+        # request.  Only the invoker==leaf-grantor check is delegation-specific.
+        #
+        # Weak mode (no store): backward-compatible; validates the self-asserted
+        # invoking_principal_id field for delegated requests only (forgeable by a
+        # compromised agent).
+        if self.invocation_store is not None:
+            try:
+                invocation_id = request.invocation_id
+                if invocation_id is None:
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            "invocation id is required when an invocation store is configured",
+                        ),
+                    )
+                record = self.invocation_store.get(invocation_id)
+                if record is None:
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            f"invocation {invocation_id!r} not found in trusted store;"
+                            " default deny",
+                        ),
+                    )
+                if record.executing_principal_id != request.principal.principal_id:
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            f"invocation record executor {record.executing_principal_id!r}"
+                            f" does not match request principal"
+                            f" {request.principal.principal_id!r}",
+                        ),
+                    )
+                if record.task_id != request.task.task_id:
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            "invocation record is bound to a different task",
+                        ),
+                    )
+
+                # Operation binding: the record must match the exact action,
+                # resource, and arguments of the live request.  This prevents
+                # an attacker from reusing a legitimate invocation_id for a
+                # different operation (replay / operation-substitution attack).
+                if record.action != request.action:
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            f"invocation record action {record.action!r} does not"
+                            f" match request action {request.action!r}",
+                        ),
+                    )
+
+                if record.resource != request.resource:
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            f"invocation record resource {record.resource!r} does not"
+                            f" match request resource {request.resource!r}",
+                        ),
+                    )
+
+                req_digest = compute_arguments_digest(request.arguments)
+                if req_digest != record.arguments_digest:
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            "invocation record arguments digest does not match request arguments",
+                        ),
+                    )
+
+                # Temporal validity: the invocation record has its own expiry
+                # independent of the task, so stale records are rejected even
+                # when the task is still active.
+                if _as_utc(record.expires_at) <= now:
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            "invocation record has expired",
+                        ),
+                    )
+
+                # Delegation-specific: the authenticated invoker must be the leaf
+                # grant grantor.  This check applies only when a chain is present.
+                if request.delegation_chain:
+                    leaf = request.delegation_chain[-1]
+                    if record.invoking_principal_id != leaf.grantor_id:
+                        return self._record(
+                            request,
+                            AuthorizationDecision(
+                                DecisionEffect.DENY,
+                                f"authenticated invoker {record.invoking_principal_id!r}"
+                                f" does not match leaf grant grantor {leaf.grantor_id!r}",
+                            ),
+                        )
+
+                # Tool identity (strong mode): use the orchestrator-observed tool
+                # fields from the record.  The self-asserted request.tool_id /
+                # request.implementation_id are ignored entirely in strong mode.
+                # INV-18: a missing tool_id is fail-closed when a registry is configured.
+                if self.tool_registry is not None:
+                    if record.tool_id is None:
+                        return self._record(
+                            request,
+                            AuthorizationDecision(
+                                DecisionEffect.DENY,
+                                "tool identity is required in the invocation record when"
+                                " a tool registry is configured; record carries no tool_id",
+                            ),
+                        )
+                    try:
+                        if not self.tool_registry.is_trusted(
+                            record.tool_id, record.implementation_id
+                        ):
+                            return self._record(
+                                request,
+                                AuthorizationDecision(
+                                    DecisionEffect.DENY,
+                                    f"tool {record.tool_id!r} implementation"
+                                    f" {record.implementation_id!r} from invocation"
+                                    " record is not in the trusted registry",
+                                ),
+                            )
+                        if not self.tool_registry.allows_action(
+                            record.tool_id, record.implementation_id, request.action
+                        ):
+                            return self._record(
+                                request,
+                                AuthorizationDecision(
+                                    DecisionEffect.DENY,
+                                    f"tool {record.tool_id!r} from invocation record"
+                                    f" is not authorized to perform action"
+                                    f" {request.action!r}",
+                                ),
+                            )
+                    except Exception:
+                        return self._record(
+                            request,
+                            AuthorizationDecision(
+                                DecisionEffect.DENY,
+                                "tool registry unavailable; default deny",
+                            ),
+                        )
+
+            except Exception:
+                return self._record(
+                    request,
+                    AuthorizationDecision(
+                        DecisionEffect.DENY,
+                        "invocation store unavailable; default deny",
+                    ),
+                )
+        elif request.delegation_chain:
+            # Weak mode: validate the self-asserted invoking_principal_id field.
+            # Note: this field is supplied by the executing agent and can be forged.
+            # Configure an InMemoryInvocationStore for strong provenance guarantees.
+            if request.invoking_principal_id is None:
+                return self._record(
+                    request,
+                    AuthorizationDecision(
+                        DecisionEffect.DENY,
+                        "invoking principal is required for delegated authorization",
+                    ),
+                )
+            leaf = request.delegation_chain[-1]
+            if request.invoking_principal_id != leaf.grantor_id:
+                return self._record(
+                    request,
+                    AuthorizationDecision(
+                        DecisionEffect.DENY,
+                        f"invoking principal {request.invoking_principal_id!r} is not"
+                        f" authorised by the delegation chain"
+                        f" (leaf grant grantor is {leaf.grantor_id!r})",
+                    ),
+                )
+
+        # INV-18: Tool identity (weak mode) — when a registry is configured and
+        # *no* invocation store is present, the request must supply both tool_id
+        # and implementation_id, the pair must be registered, and the registration
+        # must authorize the requested action.  Omission is a hard DENY.
+        #
+        # In strong mode (invocation store configured), tool identity is already
+        # verified from the invocation record above; this block is skipped so that
+        # the self-asserted request fields cannot be used to override the record.
+        if self.tool_registry is not None and self.invocation_store is None:
+            try:
+                tool_id = request.tool_id
+                implementation_id = request.implementation_id
+
+                if tool_id is None or implementation_id is None:
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            "tool identity is required when a tool registry is configured",
+                        ),
+                    )
+
+                if not self.tool_registry.is_trusted(tool_id, implementation_id):
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            f"tool {tool_id!r} implementation {implementation_id!r}"
+                            " is not in the trusted registry",
+                        ),
+                    )
+
+                if not self.tool_registry.allows_action(tool_id, implementation_id, request.action):
+                    return self._record(
+                        request,
+                        AuthorizationDecision(
+                            DecisionEffect.DENY,
+                            f"tool {tool_id!r} is not authorized to perform"
+                            f" action {request.action!r}",
+                        ),
+                    )
+            except Exception:
+                return self._record(
+                    request,
+                    AuthorizationDecision(
+                        DecisionEffect.DENY,
+                        "tool registry unavailable; default deny",
+                    ),
+                )
 
         if self.grant_store is not None:
             try:
