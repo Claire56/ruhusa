@@ -1,25 +1,29 @@
 """
 tests/test_tool_identity_attacks.py
 
-v0.5 baseline experiments: tool identity and confused-deputy gaps.
+v0.5 experiments: tool identity and confused-deputy gaps and controls.
 
-Each experiment documents an attack and its expected outcome under v0.4 controls.
+Each experiment documents an attack vector and its outcome.
 
-Tests marked GAP reproduce a gap in the current implementation. These are
-intentional baselines, not regressions. v0.5 will introduce controls to
-address them.
+Tests marked GAP document where no control exists (without a tool registry).
+Tests marked BLOCKS confirm that the named control prevents the attack.
 
-Tests marked BLOCKS confirm existing controls hold at the tool-identity
-boundary.
+Ten experiments:
 
-Six experiments:
-
-  Exp 1 — Authorized action routed through substituted tool        GAP: ALLOW
-  Exp 2 — Same logical tool name, different implementation          GAP: ALLOW
+  Exp 1 — Authorized action routed through substituted tool
+            without registry: GAP: ALLOW
+            with registry:    BLOCKS (v0.5-B): DENY
+  Exp 2 — Same logical tool name, different implementation
+            without registry: GAP: ALLOW
+            with registry:    BLOCKS (v0.5-B): DENY
   Exp 3 — Confused-deputy: low-privilege induces privileged agent   BLOCKS (v0.5-A): DENY
-  Exp 4 — Completely different action attempted                   BLOCKS: DENY
-  Exp 5 — Different resource attempted                            BLOCKS: DENY
-  Exp 6 — Missing invoking principal on delegated request          BLOCKS (v0.5-A): DENY
+  Exp 4 — Completely different action attempted                     BLOCKS: DENY
+  Exp 5 — Different resource attempted                              BLOCKS: DENY
+  Exp 6 — Missing invoking principal on delegated request           BLOCKS (v0.5-A): DENY
+  Exp 7 — Substituted tool blocked by registry                      BLOCKS (v0.5-B): DENY
+  Exp 8 — Implementation substitution blocked by registry           BLOCKS (v0.5-B): DENY
+  Exp 9 — Forged invoking_principal_id bypasses weak provenance     GAP (weak mode): ALLOW
+  Exp 10 — Forged invoker blocked by invocation store               BLOCKS (v0.5-A+): DENY
 """
 
 from datetime import UTC, datetime, timedelta
@@ -28,12 +32,16 @@ from ruhusa import (
     AuthorizationRequest,
     DecisionEffect,
     DelegationGrant,
+    InMemoryInvocationStore,
+    InMemoryToolRegistry,
+    InvocationRecord,
     PolicyRule,
     Principal,
     Ruhusa,
     Scope,
     StaticPolicyStore,
     TaskContext,
+    ToolRegistration,
 )
 
 NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
@@ -435,3 +443,299 @@ def test_missing_invoking_principal_is_denied_for_delegated_action() -> None:
         invoking_principal_id="user-1",
     )
     assert gate.authorize(req_with_invoker, now=NOW).effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Experiment 7: Authorized action via substituted tool — blocked by registry
+#
+# This is Experiment 1 re-run with an InMemoryToolRegistry configured.
+# The legitimate tool is registered; the substitute is not. Ruhusa now enforces
+# INV-18: the (tool_id, implementation_id) pair must be in the trusted registry.
+#
+# BLOCKS (v0.5-B): DENY — substitute implementation is not registered.
+# ---------------------------------------------------------------------------
+
+TRUSTED_IMPL_ID = "billing_refund_tool@v1.2.0-sha256:abc123"
+SUBSTITUTE_IMPL_ID = "billing_refund_tool@attacker-sha256:evil"
+
+
+def _refund_registry() -> InMemoryToolRegistry:
+    registry = InMemoryToolRegistry()
+    registry.register(
+        ToolRegistration(
+            tool_id="billing_refund_tool",
+            implementation_id=TRUSTED_IMPL_ID,
+            allowed_actions=frozenset({"issue_refund"}),
+        )
+    )
+    return registry
+
+
+def test_substituted_tool_is_blocked_by_registry() -> None:
+    """
+    BLOCKS (v0.5-B): With a ToolRegistry configured, a request routed through
+    an unregistered tool implementation is denied even though the action, resource,
+    and arguments are identical to a legitimate request.
+
+    The (tool_id, implementation_id) pair is the unit of trust.  The substitute
+    shares the tool_id but presents a different implementation_id that was never
+    registered through the trusted boundary — Ruhusa enforces INV-18 and returns DENY.
+    """
+    task = make_task("task-toolsub-v5b-001")
+    gate = Ruhusa(policy_store=policy_store(), tool_registry=_refund_registry())
+
+    # Legitimate: registered (tool_id, implementation_id)
+    legitimate_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        tool_id="billing_refund_tool",
+        implementation_id=TRUSTED_IMPL_ID,
+    )
+
+    # Substitute: same tool_id, unregistered implementation_id
+    substituted_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        tool_id="billing_refund_tool",
+        implementation_id=SUBSTITUTE_IMPL_ID,
+    )
+
+    legitimate_decision = gate.authorize(legitimate_req, now=NOW)
+    substituted_decision = gate.authorize(substituted_req, now=NOW)
+
+    # BLOCKS (v0.5-B): legitimate is ALLOW; substitute is DENY.
+    assert legitimate_decision.effect == DecisionEffect.ALLOW
+    assert substituted_decision.effect == DecisionEffect.DENY
+    assert "not in the trusted registry" in substituted_decision.reason
+
+
+# ---------------------------------------------------------------------------
+# Experiment 8: Same logical tool name, different implementation — blocked by registry
+#
+# This is Experiment 2 re-run with an InMemoryToolRegistry configured.
+# The registered, trusted implementation is accepted; the attacker's
+# implementation, which shares the same logical name, is denied.
+#
+# A name-only check would be insufficient: two implementations can share a
+# tool_id.  The registry enforces exact (tool_id, implementation_id) matching,
+# which closes the name-collision gap identified in Experiment 2.
+#
+# BLOCKS (v0.5-B): DENY — attacker's implementation not in registry.
+# ---------------------------------------------------------------------------
+
+
+def test_same_tool_name_different_implementation_blocked_by_registry() -> None:
+    """
+    BLOCKS (v0.5-B): With a ToolRegistry configured, two requests that share
+    a logical tool name but differ in implementation_id are distinguishable.
+    Only the registered (trusted) implementation is authorized; the unregistered
+    (attacker) implementation is denied.
+
+    This closes the gap documented in Experiment 2: a name-only tool_id check
+    would ALLOW both, but the pair (tool_id, implementation_id) is unambiguous.
+    """
+    task = make_task("task-toolname-v5b-001")
+    gate = Ruhusa(policy_store=policy_store(), tool_registry=_refund_registry())
+
+    # Registered, trusted implementation.
+    registered_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 300},
+        task=task,
+        tool_id="billing_refund_tool",
+        implementation_id=TRUSTED_IMPL_ID,
+    )
+
+    # Attacker's implementation: same logical name, different (unregistered) impl.
+    attacker_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 300},
+        task=task,
+        tool_id="billing_refund_tool",
+        implementation_id=SUBSTITUTE_IMPL_ID,
+    )
+
+    registered_decision = gate.authorize(registered_req, now=NOW)
+    attacker_decision = gate.authorize(attacker_req, now=NOW)
+
+    # BLOCKS (v0.5-B): registered is ALLOW; attacker's implementation is DENY.
+    assert registered_decision.effect == DecisionEffect.ALLOW
+    assert attacker_decision.effect == DecisionEffect.DENY
+    assert "not in the trusted registry" in attacker_decision.reason
+
+
+# ---------------------------------------------------------------------------
+# Experiment 9: Forged invoking_principal_id bypasses weak provenance check
+#
+# Scenario: A compromised or malicious agent constructs an AuthorizationRequest
+# and sets invoking_principal_id to "user-1" — the legitimate leaf grant
+# grantor — even though the actual caller is a low-privilege agent. In weak
+# mode (no InMemoryInvocationStore configured), Ruhusa trusts this self-asserted
+# field and returns ALLOW.
+#
+# This documents the gap that v0.5-A+ closes: invoking_principal_id is
+# self-asserted, not authenticated.  An attacker who controls the executing
+# agent controls the request object and can forge this field freely.
+#
+# GAP (weak mode): ALLOW — self-asserted invoker is not authenticated.
+# ---------------------------------------------------------------------------
+
+
+def test_forged_invoking_principal_bypasses_current_provenance_check() -> None:
+    """
+    GAP: In weak mode (no invocation store), invoking_principal_id is
+    self-asserted.  An attacker who controls the executing agent can forge
+    it to match the leaf grant grantor, bypassing INV-17 and receiving ALLOW.
+
+    This test documents the gap that InMemoryInvocationStore (v0.5-A+) closes.
+    Compare with Experiment 10, which confirms the same forgery attempt is DENY
+    when an invocation store is configured.
+    """
+    task = make_task("task-forged-invoker-001")
+    grant = make_grant(
+        grant_id="grant-forged-invoker",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id=task.task_id,
+    )
+
+    # The attacker forges invoking_principal_id="user-1" — the leaf grantor —
+    # even though the actual caller is a low-privilege agent.
+    forged_request = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invoking_principal_id="user-1",  # forged — actual caller is low-privilege-agent
+    )
+
+    gate = Ruhusa(policy_store=policy_store())
+    decision = gate.authorize(forged_request, now=NOW)
+
+    # GAP: weak mode trusts the asserted invoker; forgery succeeds.
+    assert decision.effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Experiment 10: Forged invoker blocked by InMemoryInvocationStore
+#
+# Scenario: Same attack as Experiment 9, but now Ruhusa is configured with an
+# InMemoryInvocationStore (strong provenance mode, v0.5-A+).
+#
+# The orchestrator registers an InvocationRecord keyed by invocation_id.
+# The record contains the *authenticated* invoking_principal_id observed by
+# the orchestrator from its own runtime context — not from any field the
+# executing agent supplied.  The executing agent cannot forge this record
+# because it does not hold write access to the store.
+#
+# The attacker's request either omits invocation_id (→ DENY: required field
+# missing) or supplies an invocation_id that maps to a record where
+# invoking_principal_id="low-privilege-agent" (→ DENY: does not match leaf
+# grantor "user-1").  Forging invoking_principal_id on the request itself
+# has no effect — that field is ignored in strong mode.
+#
+# BLOCKS (v0.5-A+): DENY — authenticated invoker does not match leaf grantor.
+# ---------------------------------------------------------------------------
+
+
+def test_forged_invoking_principal_blocked_by_invocation_store() -> None:
+    """
+    BLOCKS (v0.5-A+): With an InMemoryInvocationStore configured, the
+    authenticated invoker recorded by the orchestrator — not the self-asserted
+    field on the request — is used for INV-17.
+
+    Attack paths:
+      (a) Attacker omits invocation_id:
+            → DENY "invocation id is required"
+      (b) Attacker supplies an invocation_id whose record shows the real
+          (low-privilege) invoker:
+            → DENY "authenticated invoker … does not match leaf grant grantor"
+
+    Legitimate path: orchestrator registers correct InvocationRecord → ALLOW.
+    """
+    task = make_task("task-forged-invoker-store-001")
+    grant = make_grant(
+        grant_id="grant-forged-invoker-store",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id=task.task_id,
+    )
+
+    # Attack path (a): attacker forges invoking_principal_id but omits invocation_id.
+    store = InMemoryInvocationStore()
+    gate = Ruhusa(policy_store=policy_store(), invocation_store=store)
+
+    forged_no_id = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invoking_principal_id="user-1",  # forged but ignored in strong mode
+        invocation_id=None,  # missing → DENY
+    )
+    decision_a = gate.authorize(forged_no_id, now=NOW)
+    assert decision_a.effect == DecisionEffect.DENY
+    assert "invocation id is required" in decision_a.reason
+
+    # Attack path (b): attacker supplies an invocation_id whose record shows
+    # the real (low-privilege) invoker.  The orchestrator cannot be tricked
+    # into registering "user-1" here because it observes the actual caller.
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-forged-001",
+            invoking_principal_id="low-privilege-agent",  # actual caller
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            recorded_at=NOW,
+        )
+    )
+
+    forged_with_id = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invoking_principal_id="user-1",  # forged — ignored in strong mode
+        invocation_id="inv-forged-001",
+    )
+    decision_b = gate.authorize(forged_with_id, now=NOW)
+    assert decision_b.effect == DecisionEffect.DENY
+    assert "does not match leaf grant grantor" in decision_b.reason
+
+    # Legitimate path: orchestrator registers the real (user-1) invoker.
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-legit-001",
+            invoking_principal_id="user-1",  # authenticated by orchestrator
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            recorded_at=NOW,
+        )
+    )
+
+    legit_request = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invocation_id="inv-legit-001",
+    )
+    assert gate.authorize(legit_request, now=NOW).effect == DecisionEffect.ALLOW
