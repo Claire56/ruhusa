@@ -221,7 +221,7 @@ def test_tool_not_authorized_for_action_is_denied() -> None:
     restricted_tool = ToolRegistration(
         tool_id="billing_refund_tool",
         implementation_id="billing_refund_tool@v1.2.0-sha256:abc123",
-        allowed_actions=frozenset({"read_balance"}),  # issue_refund NOT included
+        allowed_actions=frozenset({"read_balance"}),   # issue_refund NOT included
     )
     registry.register(restricted_tool)
 

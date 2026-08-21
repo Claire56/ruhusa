@@ -8,7 +8,7 @@ Each experiment documents an attack vector and its outcome.
 Tests marked GAP document where no control exists (without a tool registry).
 Tests marked BLOCKS confirm that the named control prevents the attack.
 
-Ten experiments:
+Fourteen experiments:
 
   Exp 1 — Authorized action routed through substituted tool
             without registry: GAP: ALLOW
@@ -24,6 +24,10 @@ Ten experiments:
   Exp 8 — Implementation substitution blocked by registry           BLOCKS (v0.5-B): DENY
   Exp 9 — Forged invoking_principal_id bypasses weak provenance     GAP (weak mode): ALLOW
   Exp 10 — Forged invoker blocked by invocation store               BLOCKS (v0.5-A+): DENY
+  Exp 11 — Forged tool identity bypasses weak registry check        GAP (weak mode): ALLOW
+  Exp 12 — Forged tool identity blocked by invocation store         BLOCKS (v0.5-A+): DENY
+  Exp 13 — Operation substitution blocked by arguments digest       BLOCKS (v0.5-A+): DENY
+  Exp 14 — Stale invocation record blocked by expiry                BLOCKS (v0.5-A+): DENY
 """
 
 from datetime import UTC, datetime, timedelta
@@ -42,6 +46,7 @@ from ruhusa import (
     StaticPolicyStore,
     TaskContext,
     ToolRegistration,
+    compute_arguments_digest,
 )
 
 NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
@@ -339,7 +344,7 @@ def test_completely_different_action_is_denied() -> None:
 
     req = make_request(
         principal_id="billing-agent",
-        action="delete_account",  # not in policy or delegated scope
+        action="delete_account",   # not in policy or delegated scope
         resource="customer:123:billing",
         arguments={"amount": 250},
         task=task,
@@ -372,7 +377,7 @@ def test_different_resource_is_denied() -> None:
     req = make_request(
         principal_id="billing-agent",
         action="issue_refund",
-        resource="customer:456:billing",  # outside authorized prefix
+        resource="customer:456:billing",   # outside authorized prefix
         arguments={"amount": 250},
         task=task,
     )
@@ -573,7 +578,6 @@ def test_same_tool_name_different_implementation_blocked_by_registry() -> None:
     assert attacker_decision.effect == DecisionEffect.DENY
     assert "not in the trusted registry" in attacker_decision.reason
 
-
 # ---------------------------------------------------------------------------
 # Experiment 9: Forged invoking_principal_id bypasses weak provenance check
 #
@@ -685,7 +689,7 @@ def test_forged_invoking_principal_blocked_by_invocation_store() -> None:
         task=task,
         delegation_chain=(grant,),
         invoking_principal_id="user-1",  # forged but ignored in strong mode
-        invocation_id=None,  # missing → DENY
+        invocation_id=None,              # missing → DENY
     )
     decision_a = gate.authorize(forged_no_id, now=NOW)
     assert decision_a.effect == DecisionEffect.DENY
@@ -700,7 +704,13 @@ def test_forged_invoking_principal_blocked_by_invocation_store() -> None:
             invoking_principal_id="low-privilege-agent",  # actual caller
             executing_principal_id="billing-agent",
             task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id=None,
+            implementation_id=None,
             recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
         )
     )
 
@@ -722,10 +732,16 @@ def test_forged_invoking_principal_blocked_by_invocation_store() -> None:
     store.register(
         InvocationRecord(
             invocation_id="inv-legit-001",
-            invoking_principal_id="user-1",  # authenticated by orchestrator
+            invoking_principal_id="user-1",     # authenticated by orchestrator
             executing_principal_id="billing-agent",
             task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id=None,
+            implementation_id=None,
             recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
         )
     )
 
@@ -739,3 +755,359 @@ def test_forged_invoking_principal_blocked_by_invocation_store() -> None:
         invocation_id="inv-legit-001",
     )
     assert gate.authorize(legit_request, now=NOW).effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Experiment 11: Forged tool identity bypasses weak registry check
+#
+# Scenario: A compromised executing agent claims trusted tool identity fields
+# (tool_id and implementation_id) in its AuthorizationRequest even though it
+# is actually running a substitute (malicious) implementation. In weak mode
+# (tool registry configured, no InMemoryInvocationStore), Ruhusa trusts these
+# self-asserted fields.
+#
+# The same gap exists for invoking_principal_id (Experiment 9). In weak mode
+# all identity claims in the request object are self-asserted: an attacker who
+# controls the executing agent controls the request and can forge any field.
+#
+# GAP (weak mode): ALLOW — implementation_id is not authenticated.
+# ---------------------------------------------------------------------------
+
+
+def test_forged_tool_identity_bypasses_weak_registry_check() -> None:
+    """
+    GAP (weak mode): With a tool registry configured but no invocation store,
+    implementation_id is self-asserted.  A compromised agent can claim the
+    trusted implementation_id even while running a substitute implementation.
+    Ruhusa trusts the asserted field and returns ALLOW.
+
+    The attacker also forges invoking_principal_id (same gap as Exp 9),
+    illustrating that all identity fields on AuthorizationRequest are
+    self-asserted and forgeable in weak mode.
+
+    Compare with Experiment 12, which confirms both forgeries are DENY when
+    an invocation store is configured.
+    """
+    task = make_task("task-forged-tool-001")
+    grant = make_grant(
+        grant_id="grant-forged-tool",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id=task.task_id,
+    )
+
+    gate = Ruhusa(policy_store=policy_store(), tool_registry=_refund_registry())
+
+    # Attacker forges invoking_principal_id (the leaf grantor) AND
+    # implementation_id (the trusted implementation). Neither field is
+    # authenticated in weak mode; both are supplied by the executing agent.
+    forged_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invoking_principal_id="user-1",     # forged — actual caller is low-privilege-agent
+        tool_id="billing_refund_tool",
+        implementation_id=TRUSTED_IMPL_ID,  # forged — actual impl is SUBSTITUTE_IMPL_ID
+    )
+
+    decision = gate.authorize(forged_req, now=NOW)
+
+    # GAP: weak mode trusts both asserted fields; forgery succeeds.
+    assert decision.effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Experiment 12: Forged tool identity blocked by InMemoryInvocationStore
+#
+# Scenario: Same attack as Experiment 11, but Ruhusa is now configured with
+# an InMemoryInvocationStore (strong mode, v0.5-A+).
+#
+# The orchestrator registers an InvocationRecord keyed by invocation_id. It
+# records the *actual* tool implementation it resolved at invocation time — not
+# any field supplied by the executing agent. Ruhusa uses the record's tool
+# fields for the INV-18 registry check; the request's tool_id /
+# implementation_id fields are ignored entirely in strong mode.
+#
+# Attack: the attacker supplies an invocation_id whose record contains the
+# attacker's (unregistered) implementation. Claiming TRUSTED_IMPL_ID in the
+# request has no effect because that field is never consulted.
+#
+# BLOCKS (v0.5-A+): DENY — record's implementation is not in the trusted
+# registry.
+# ---------------------------------------------------------------------------
+
+
+def test_forged_tool_identity_blocked_by_invocation_store() -> None:
+    """
+    BLOCKS (v0.5-A+): With an InMemoryInvocationStore configured (strong mode),
+    tool identity for INV-18 comes from the orchestrator-registered record, not
+    from the self-asserted request fields.
+
+    Attack path:
+      - Orchestrator registers record with the actual (attacker's) implementation_id
+      - Agent claims trusted implementation_id in the request (ignored)
+      - Ruhusa uses the record's implementation_id → not registered → DENY
+
+    Legitimate path:
+      - Orchestrator registers record with the actual trusted implementation_id
+      - Agent presents invocation_id → Ruhusa reads record → registered → ALLOW
+    """
+    task = make_task("task-forged-tool-store-001")
+    grant = make_grant(
+        grant_id="grant-forged-tool-store",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id=task.task_id,
+    )
+
+    store = InMemoryInvocationStore()
+    gate = Ruhusa(
+        policy_store=policy_store(),
+        tool_registry=_refund_registry(),
+        invocation_store=store,
+    )
+
+    # Orchestrator records what it actually observed: the attacker's substitute.
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-forged-tool-001",
+            invoking_principal_id="user-1",
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id="billing_refund_tool",
+            implementation_id=SUBSTITUTE_IMPL_ID,   # attacker's actual tool
+            recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+
+    # Agent forges implementation_id in the request — strong mode ignores it.
+    attack_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invocation_id="inv-forged-tool-001",
+        tool_id="billing_refund_tool",
+        implementation_id=TRUSTED_IMPL_ID,  # forged — ignored in strong mode
+    )
+    decision = gate.authorize(attack_req, now=NOW)
+    # BLOCKS: record's SUBSTITUTE_IMPL_ID is not registered → DENY.
+    assert decision.effect == DecisionEffect.DENY
+    assert "from invocation record is not in the trusted registry" in decision.reason
+
+    # Legitimate path: orchestrator registers record with the actual trusted tool.
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-legit-tool-001",
+            invoking_principal_id="user-1",
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id="billing_refund_tool",
+            implementation_id=TRUSTED_IMPL_ID,  # actual trusted implementation
+            recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+    legit_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invocation_id="inv-legit-tool-001",
+    )
+    assert gate.authorize(legit_req, now=NOW).effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Experiment 13: Operation substitution blocked by arguments digest
+#
+# Scenario: An attacker attempts to reuse a legitimate invocation_id for a
+# different operation. The orchestrator registered an InvocationRecord for a
+# $250 refund. The attacker submits a request for a $500 refund using the same
+# invocation_id (argument-escalation / operation-substitution attack).
+#
+# The InvocationRecord binds the exact operation: action, resource, and a
+# SHA-256 digest of the canonical arguments. Ruhusa recomputes the digest from
+# the live request arguments and compares it to the record. A mismatch is a
+# hard DENY — the invocation_id cannot be replayed for a different operation.
+#
+# BLOCKS (v0.5-A+): DENY — arguments digest mismatch.
+# ---------------------------------------------------------------------------
+
+
+def test_operation_substitution_blocked_by_arguments_digest() -> None:
+    """
+    BLOCKS (v0.5-A+): With an InMemoryInvocationStore configured, the
+    InvocationRecord binds the exact arguments via a SHA-256 digest.  Reusing
+    a legitimate invocation_id with different arguments (operation-substitution
+    / argument-escalation) produces a digest mismatch → DENY.
+
+    Attack: orchestrator registered a $250 refund; attacker submits a $500
+    refund reusing the same invocation_id.
+
+    Legitimate path: exact same arguments ($250) match the registered digest
+    and the request is ALLOW.
+    """
+    task = make_task("task-opsub-001")
+    grant = make_grant(
+        grant_id="grant-opsub",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id=task.task_id,
+    )
+
+    store = InMemoryInvocationStore()
+    gate = Ruhusa(policy_store=policy_store(), invocation_store=store)
+
+    # Orchestrator registers a $250 refund invocation.
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-opsub-001",
+            invoking_principal_id="user-1",
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),  # $250
+            tool_id=None,
+            implementation_id=None,
+            recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+
+    # Attacker reuses the invocation_id but escalates the amount to $500.
+    # $500 is within REFUND_SCOPE and policy limits, but the digest won't match.
+    substituted_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 500},  # escalated — digest will not match
+        task=task,
+        delegation_chain=(grant,),
+        invocation_id="inv-opsub-001",
+    )
+    decision = gate.authorize(substituted_req, now=NOW)
+    # BLOCKS: arguments digest mismatch → DENY.
+    assert decision.effect == DecisionEffect.DENY
+    assert "arguments digest" in decision.reason
+
+    # Legitimate path: exact same arguments ($250) match the registered digest.
+    legit_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},  # matches the registered digest
+        task=task,
+        delegation_chain=(grant,),
+        invocation_id="inv-opsub-001",
+    )
+    assert gate.authorize(legit_req, now=NOW).effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Experiment 14: Stale invocation record blocked by expiry
+#
+# Scenario: An InvocationRecord carries an expires_at timestamp independent
+# of the parent task. Once the record expires, any request that references it
+# is denied — even when the task itself is still active.
+#
+# This prevents long-lived or leaked invocation_ids from being replayed after
+# their intended authorization window closes. The task and the record have
+# separate, independently enforced lifetimes.
+#
+# BLOCKS (v0.5-A+): DENY — invocation record has expired.
+# ---------------------------------------------------------------------------
+
+
+def test_stale_invocation_record_is_denied() -> None:
+    """
+    BLOCKS (v0.5-A+): InvocationRecord.expires_at is enforced independently
+    of the parent task's expiry.  A request referencing an expired record is
+    denied even when the task is still active.
+
+    Stale record (expires_at in the past) → DENY.
+    Fresh record (expires_at in the future) with the same operation → ALLOW.
+    """
+    task = make_task("task-stale-001")
+    grant = make_grant(
+        grant_id="grant-stale",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id=task.task_id,
+    )
+
+    store = InMemoryInvocationStore()
+    gate = Ruhusa(policy_store=policy_store(), invocation_store=store)
+
+    # Orchestrator registered a record that has since expired.
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-stale-001",
+            invoking_principal_id="user-1",
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id=None,
+            implementation_id=None,
+            recorded_at=NOW - timedelta(minutes=10),
+            expires_at=NOW - timedelta(seconds=1),  # already expired
+        )
+    )
+
+    stale_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,          # task is still active (expires in 1 hour)
+        delegation_chain=(grant,),
+        invocation_id="inv-stale-001",
+    )
+    decision = gate.authorize(stale_req, now=NOW)
+    # BLOCKS: record expired → DENY despite task being active.
+    assert decision.effect == DecisionEffect.DENY
+    assert "expired" in decision.reason
+
+    # Sanity check: a fresh record for the same operation is ALLOW.
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-fresh-001",
+            invoking_principal_id="user-1",
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id=None,
+            implementation_id=None,
+            recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),  # still valid
+        )
+    )
+    fresh_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invocation_id="inv-fresh-001",
+    )
+    assert gate.authorize(fresh_req, now=NOW).effect == DecisionEffect.ALLOW

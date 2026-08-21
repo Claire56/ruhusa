@@ -6,11 +6,17 @@ from datetime import UTC, datetime
 from .audit import InMemoryAuditLog
 from .delegation import validate_delegation_chain
 from .grants import InMemoryGrantStore
-from .invocations import InMemoryInvocationStore
+from .invocations import InMemoryInvocationStore, compute_arguments_digest
 from .models import AuthorizationDecision, AuthorizationRequest, DecisionEffect
 from .policy import StaticPolicyStore
 from .revocation import InMemoryRevocationStore, RevocationRecord
 from .tools import InMemoryToolRegistry
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 class Ruhusa:
@@ -30,12 +36,14 @@ class Ruhusa:
     - action/resource/arguments must fit effective delegated scope
     - INV-17: the authenticated immediate invoker of every delegated execution
       must match the grantor of the leaf delegation grant; strong mode
-      (invocation store) uses a trusted orchestrator-registered record;
-      weak mode (backward-compatible) uses the self-asserted
+      (invocation store) uses a trusted orchestrator-registered record that also
+      binds the operation (action, resource, arguments digest), tool identity,
+      and expiry; weak mode (backward-compatible) uses the self-asserted
       invoking_principal_id field; omission is a hard DENY in both modes
-    - INV-18: when a tool registry is configured, tool_id and implementation_id
-      must be present, registered, and authorized to perform the action;
-      omission, unknown pairs, and unauthorized actions all DENY
+    - INV-18 (weak mode only): when a tool registry is configured and no
+      invocation store is present, tool_id and implementation_id from the
+      request must be present, registered, and authorized; in strong mode
+      tool identity is verified from the invocation record instead
     - policy evaluation failures deny the action
     - revocation-check failures deny the action
     - tool-registry failures deny the action
@@ -153,6 +161,92 @@ class Ruhusa:
                                 "invocation record is bound to a different task",
                             ),
                         )
+
+                    # Operation binding: the record must match the exact action,
+                    # resource, and arguments of the live request.  This prevents
+                    # an attacker from reusing a legitimate invocation_id for a
+                    # different operation (replay / operation-substitution attack).
+                    if record.action != request.action:
+                        return self._record(
+                            request,
+                            AuthorizationDecision(
+                                DecisionEffect.DENY,
+                                f"invocation record action {record.action!r} does not"
+                                f" match request action {request.action!r}",
+                            ),
+                        )
+
+                    if record.resource != request.resource:
+                        return self._record(
+                            request,
+                            AuthorizationDecision(
+                                DecisionEffect.DENY,
+                                f"invocation record resource {record.resource!r} does not"
+                                f" match request resource {request.resource!r}",
+                            ),
+                        )
+
+                    req_digest = compute_arguments_digest(request.arguments)
+                    if req_digest != record.arguments_digest:
+                        return self._record(
+                            request,
+                            AuthorizationDecision(
+                                DecisionEffect.DENY,
+                                "invocation record arguments digest does not match"
+                                " request arguments",
+                            ),
+                        )
+
+                    # Temporal validity: the invocation record has its own expiry
+                    # independent of the task, so stale records are rejected even
+                    # when the task is still active.
+                    if _as_utc(record.expires_at) <= now:
+                        return self._record(
+                            request,
+                            AuthorizationDecision(
+                                DecisionEffect.DENY,
+                                "invocation record has expired",
+                            ),
+                        )
+
+                    # Tool identity (strong mode): use the orchestrator-observed tool
+                    # fields from the record.  The self-asserted request.tool_id /
+                    # request.implementation_id are ignored entirely in strong mode.
+                    if self.tool_registry is not None and record.tool_id is not None:
+                        try:
+                            if not self.tool_registry.is_trusted(
+                                record.tool_id, record.implementation_id
+                            ):
+                                return self._record(
+                                    request,
+                                    AuthorizationDecision(
+                                        DecisionEffect.DENY,
+                                        f"tool {record.tool_id!r} implementation"
+                                        f" {record.implementation_id!r} from invocation"
+                                        " record is not in the trusted registry",
+                                    ),
+                                )
+                            if not self.tool_registry.allows_action(
+                                record.tool_id, record.implementation_id, request.action
+                            ):
+                                return self._record(
+                                    request,
+                                    AuthorizationDecision(
+                                        DecisionEffect.DENY,
+                                        f"tool {record.tool_id!r} from invocation record"
+                                        f" is not authorized to perform action"
+                                        f" {request.action!r}",
+                                    ),
+                                )
+                        except Exception:
+                            return self._record(
+                                request,
+                                AuthorizationDecision(
+                                    DecisionEffect.DENY,
+                                    "tool registry unavailable; default deny",
+                                ),
+                            )
+
                 except Exception:
                     return self._record(
                         request,
@@ -185,12 +279,15 @@ class Ruhusa:
                         ),
                     )
 
-        # INV-18: Tool identity — when a registry is configured, the request must
-        # supply both tool_id and implementation_id, the pair must be registered,
-        # and the registration must authorize the requested action.  Omission is a
-        # hard DENY; an attacker who controls the request object must not be able
-        # to bypass the check by leaving either field None.
-        if self.tool_registry is not None:
+        # INV-18: Tool identity (weak mode) — when a registry is configured and
+        # *no* invocation store is present, the request must supply both tool_id
+        # and implementation_id, the pair must be registered, and the registration
+        # must authorize the requested action.  Omission is a hard DENY.
+        #
+        # In strong mode (invocation store configured), tool identity is already
+        # verified from the invocation record above; this block is skipped so that
+        # the self-asserted request fields cannot be used to override the record.
+        if self.tool_registry is not None and self.invocation_store is None:
             try:
                 tool_id = request.tool_id
                 implementation_id = request.implementation_id
