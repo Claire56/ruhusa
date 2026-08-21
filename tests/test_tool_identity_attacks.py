@@ -8,7 +8,7 @@ Each experiment documents an attack vector and its outcome.
 Tests marked GAP document where no control exists (without a tool registry).
 Tests marked BLOCKS confirm that the named control prevents the attack.
 
-Fourteen experiments:
+Sixteen experiments:
 
   Exp 1 — Authorized action routed through substituted tool
             without registry: GAP: ALLOW
@@ -28,6 +28,8 @@ Fourteen experiments:
   Exp 12 — Forged tool identity blocked by invocation store         BLOCKS (v0.5-A+): DENY
   Exp 13 — Operation substitution blocked by arguments digest       BLOCKS (v0.5-A+): DENY
   Exp 14 — Stale invocation record blocked by expiry                BLOCKS (v0.5-A+): DENY
+  Exp 15 — Non-delegated request bypasses strong-mode tool check    GAP: ALLOW
+  Exp 16 — Exact same-operation invocation replay                   GAP: ALLOW (no consume)
 """
 
 from datetime import UTC, datetime, timedelta
@@ -1112,3 +1114,186 @@ def test_stale_invocation_record_is_denied() -> None:
         invocation_id="inv-fresh-001",
     )
     assert gate.authorize(fresh_req, now=NOW).effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Experiment 15: Non-delegated request bypasses strong-mode tool check
+#
+# Scenario: Ruhusa is configured with both an InMemoryInvocationStore and an
+# InMemoryToolRegistry — the fully hardened configuration.  A direct (non-
+# delegated) request is submitted: delegation_chain is empty.
+#
+# Code path in core.py:
+#   1. Task valid.
+#   2. validate_delegation_chain → valid (empty chain).
+#   3. ``if request.delegation_chain:`` → False.  All strong-mode invocation
+#      and tool-identity checks are skipped.
+#   4. ``if self.tool_registry is not None and self.invocation_store is None:``
+#      → False (invocation_store IS set).  The weak-mode tool check is also
+#      skipped.
+#   5. Grant store: not configured.
+#   6. Revocation: empty chain, nothing to check.
+#   7. Scope: None (no chain), nothing to check.
+#   8. Policy: billing-agent → issue_refund → ALLOW.
+#
+# Neither the strong nor the weak tool-identity check covers non-delegated
+# requests when an invocation store is configured.  A substitute (unregistered)
+# tool implementation receives ALLOW even in the fully hardened configuration,
+# provided the request carries no delegation chain.
+#
+# This is a gap in the current architecture: tool-identity enforcement is
+# conditioned on the presence of a delegation chain, but a directly-authorized
+# principal can invoke an unregistered implementation without challenge.
+#
+# GAP: ALLOW — non-delegated requests bypass tool verification in strong mode.
+# ---------------------------------------------------------------------------
+
+
+def test_non_delegated_request_bypasses_strong_mode_tool_check() -> None:
+    """
+    GAP: When an InvocationStore is configured alongside a ToolRegistry
+    (fully hardened, strong mode), non-delegated requests skip both the
+    strong-mode invocation verification and the weak-mode tool check.
+
+    A substitute (unregistered) tool implementation submits a direct request
+    with no delegation chain.  The tool check is never reached; policy alone
+    decides the outcome → ALLOW.
+
+    This documents the gap: tool-identity enforcement in core.py is
+    gated on ``request.delegation_chain``, so a directly-authorized principal
+    can bypass it entirely.  The architecture must address this before tool
+    identity can be described as unconditionally enforced in strong mode.
+
+    Both the substitute (unregistered) and a request that omits tool fields
+    entirely receive the same outcome — the tool registry is never consulted.
+    """
+    task = make_task("task-nondelegated-tool-001")
+
+    store = InMemoryInvocationStore()
+    gate = Ruhusa(
+        policy_store=policy_store(),
+        tool_registry=_refund_registry(),
+        invocation_store=store,
+    )
+
+    # Non-delegated request from billing-agent using an unregistered tool.
+    # No delegation_chain means the strong-mode invocation block is skipped,
+    # and the weak-mode tool block is skipped because invocation_store is set.
+    substitute_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(),  # no chain — skips all invocation checks
+        tool_id="billing_refund_tool",
+        implementation_id=SUBSTITUTE_IMPL_ID,  # unregistered — never checked
+    )
+    decision = gate.authorize(substitute_req, now=NOW)
+
+    # GAP: policy permits billing-agent; tool identity is never verified.
+    assert decision.effect == DecisionEffect.ALLOW
+
+    # Same result when tool fields are omitted entirely.
+    no_tool_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(),
+        tool_id=None,
+        implementation_id=None,
+    )
+    assert gate.authorize(no_tool_req, now=NOW).effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Experiment 16: Exact same-operation invocation replay
+#
+# Scenario: An attacker obtains a legitimate invocation_id and presents the
+# exact same request — identical action, resource, and arguments — multiple
+# times.  Unlike Experiment 13 (argument escalation), the operation here is
+# bit-for-bit identical to the originally authorized one.
+#
+# The InMemoryInvocationStore provides get() and is_registered(), but no
+# consume() or used-state mechanism.  After a successful authorization, the
+# record is not marked as consumed.  Ruhusa verifies the record on every call
+# and returns ALLOW each time, so the same invocation_id can authorize
+# arbitrarily many identical operations.
+#
+# For the billing example, this means a $250 refund invocation_id could be
+# replayed many times, resulting in a multi-spend, unless the execution layer
+# independently enforces idempotency.
+#
+# Design decision recorded here: Ruhusa does not currently enforce one-shot
+# invocation semantics.  Idempotency is an execution-layer concern.  This
+# test documents the gap so the decision is explicit.  If one-shot semantics
+# are required, a consume() mechanism or used-invocations set must be added
+# to InMemoryInvocationStore and enforced in core.authorize().
+#
+# GAP: ALLOW — exact replay succeeds because records are not consumed.
+# ---------------------------------------------------------------------------
+
+
+def test_exact_invocation_replay_is_not_prevented() -> None:
+    """
+    GAP: Presenting the same invocation_id with an identical operation
+    multiple times succeeds every time.  Ruhusa performs all record checks
+    on each call but has no mechanism to detect or prevent replay.
+
+    Design note: Ruhusa does not enforce one-shot semantics by design.
+    Idempotency must be enforced by the execution layer.  This test exists
+    to make that decision explicit and traceable.  A future consume() hook
+    in InMemoryInvocationStore would change the second assertion to DENY.
+    """
+    task = make_task("task-replay-001")
+    grant = make_grant(
+        grant_id="grant-replay",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id=task.task_id,
+    )
+
+    store = InMemoryInvocationStore()
+    gate = Ruhusa(policy_store=policy_store(), invocation_store=store)
+
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-replay-001",
+            invoking_principal_id="user-1",
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id=None,
+            implementation_id=None,
+            recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+
+    def make_replay_req() -> AuthorizationRequest:
+        return AuthorizationRequest(
+            principal=Principal("billing-agent"),
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments={"amount": 250},
+            task=task,
+            delegation_chain=(grant,),
+            invocation_id="inv-replay-001",
+        )
+
+    # First presentation: ALLOW (expected — this is the legitimate authorization).
+    first = gate.authorize(make_replay_req(), now=NOW)
+    assert first.effect == DecisionEffect.ALLOW
+
+    # Second presentation: ALLOW again — the record is not consumed.
+    # GAP: one-shot semantics are not enforced by Ruhusa.
+    second = gate.authorize(make_replay_req(), now=NOW)
+    assert second.effect == DecisionEffect.ALLOW
+
+    # Third — still ALLOW.
+    third = gate.authorize(make_replay_req(), now=NOW)
+    assert third.effect == DecisionEffect.ALLOW

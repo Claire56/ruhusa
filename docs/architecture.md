@@ -1,31 +1,30 @@
 # Ruhusa Architecture
 
-**Architecture status:** Living document
-**Current framework milestone:** v0.5 development
+**Architecture status:** Living document  
+**Current framework milestone:** v0.5 development  
 **Release status:** Pre-1.0 research framework
 
 ---
 
 ## 1. Purpose
 
-Ruhusa is an open-source research framework for continuous, least-privilege authorization
-across AI agents, tools, and multi-agent workflows. Its role is narrow by design: the LLM
-may propose an action, but it never decides whether that action is authorized.
+Ruhusa is an open-source research framework for continuous, least-privilege authorization across AI agents, tools, and multi-agent workflows.
 
-Ruhusa sits between agent intent and protected side effects. It evaluates whether an action
-is permitted using deterministic authorization logic, delegation state, revocation state,
-trusted provenance, scope constraints, policy, and audit controls.
+Its role is intentionally narrow:
 
-Ruhusa is not an agent framework, model router, workflow engine, identity provider, or
-general-purpose IAM replacement. Its architectural responsibility is to answer:
+> **The LLM may propose an action, but it never decides whether that action is authorized.**
 
-> May this principal perform this protected operation, under this task, through this
-> delegation and runtime provenance, at this point in time?
+Ruhusa sits between agent intent and protected side effects. It evaluates authority using deterministic policy, delegation state, revocation state, canonical provenance, resource and argument constraints, and audit controls.
 
-As the framework evolves, the broader research question becomes:
+Ruhusa is not an agent framework, workflow engine, model router, identity provider, or general-purpose IAM replacement.
 
-> Has the authority represented by this action remained valid throughout the workflow
-> transformations that produced it?
+Its architectural responsibility is to answer:
+
+> May this principal perform this protected operation, under this task, through this authority and runtime provenance, at this point in time?
+
+The broader research question is:
+
+> Has the authority represented by this action remained valid throughout the workflow transformations that produced it?
 
 ---
 
@@ -33,82 +32,84 @@ As the framework evolves, the broader research question becomes:
 
 ### 2.1 The LLM Is Not the Authorization Boundary
 
-LLMs may interpret user intent, select candidate actions, propose tool calls, generate
-arguments, delegate work, and replan after failure. LLMs do not make the final authorization
-decision. That decision is made by deterministic code outside the model.
+Agents may interpret intent, propose actions, select tools, construct arguments, delegate work, and replan.
+
+Authorization remains deterministic and outside the model.
 
 ### 2.2 Authority Must Narrow Through Delegation
 
-A child agent may receive authority equal to or narrower than the authority available to its
-parent. It may not expand that authority.
+A child grant may be equal to or narrower than its parent grant. It may not expand authority.
 
+```text
+Parent: refund <= $500
+Child:  refund <= $250   VALID
+Child:  refund <= $1000  DENY
 ```
-Parent authority:   refund <= $500
-Valid child:        refund <= $250
-Invalid child:      refund <= $1,000
+
+### 2.3 Identity Claims Are Not Provenance
+
+A request containing:
+
+```text
+grant_id = "grant-123"
 ```
 
-### 2.3 Security-Relevant Claims Require Provenance
+does not prove that grant was issued.
 
-A string inside an agent-controlled request is not, by itself, proof of identity or
-authority. For example, `grant_id = "grant-123"` does not prove the grant was legitimately
-issued. Similarly, `invoking_principal_id = "user-1"` does not prove that `user-1` actually
-invoked the agent. And `tool_id = "billing-refund-tool"` / `implementation_id = "trusted-v1"`
-does not prove that the trusted implementation actually executed.
+Likewise:
 
-Where provenance matters, Ruhusa resolves security-relevant state from trusted or canonical
-sources.
+```text
+invoking_principal_id = "user-1"
+```
+
+does not prove `user-1` actually invoked the agent, and:
+
+```text
+tool_id = "billing_refund_tool"
+implementation_id = "trusted-v1"
+```
+
+does not prove that implementation actually executed.
+
+Where provenance matters, Ruhusa must rely on trusted canonical state rather than agent self-assertion.
 
 ### 2.4 Protected Actions Are Re-Evaluated
 
-Authorization is evaluated at the protected-action boundary. Authority that was valid earlier
-in a workflow may become invalid later because of revocation, task expiry, invocation expiry,
-changed policy, or changed trusted runtime state.
+Authorization is evaluated at the protected-action boundary. A workflow that was previously authorized may later be denied because of revocation, task expiry, invocation expiry, policy changes, or trusted runtime state.
 
 ### 2.5 Required Security State Fails Closed
 
-If Ruhusa cannot safely determine required authorization state, the action is denied:
+If required authorization state cannot be safely verified, Ruhusa denies the action.
 
-```
-policy backend failure           -> DENY
-revocation backend failure       -> DENY
-grant provenance unavailable     -> DENY
-invocation provenance unavailable -> DENY
-```
+### 2.6 Compatibility Checks Are Not Strong Security Guarantees
 
-### 2.6 Compatibility Modes Must Not Be Confused With Strong Guarantees
-
-Ruhusa may preserve weaker compatibility modes during pre-1.0 development. Those modes can
-provide useful consistency checks, but they must not be described as equivalent to trusted
-provenance.
+Weak pre-1.0 modes may inspect self-asserted identity fields for compatibility. Those modes must remain explicitly distinguishable from trusted runtime provenance.
 
 ---
 
 ## 3. Architectural Position
 
-Ruhusa sits between agent decision-making and external side effects.
-
-```
+```text
 Human / System Principal
           |
           v
 Agent / Multi-Agent Workflow
           |
-          | proposes protected action
+          | proposes protected operation
           v
 Trusted Orchestration Boundary
           |
-          | constructs / enriches runtime context
+          | creates trusted runtime provenance
           v
 AuthorizationRequest
           |
           v
 +----------------------------------+
-|             Ruhusa               |
+|              Ruhusa              |
 |                                  |
 | deterministic authorization      |
-| provenance verification          |
 | delegation validation            |
+| provenance verification          |
 | revocation                       |
 | scope enforcement                |
 | policy evaluation                |
@@ -120,33 +121,34 @@ AuthorizationRequest
       ALLOW    DENY   REQUIRE_APPROVAL
         |
         v
- Protected Tool / API / Resource
+Protected Tool / API / Resource
 ```
 
-Ruhusa is therefore part of the authorization plane, not the reasoning plane.
+Ruhusa is part of the authorization plane, not the reasoning plane.
 
 ---
 
 ## 4. Trust Boundary
 
-The architecture separates agent-controlled claims from trusted authorization state.
+### Untrusted or agent-controlled
 
-```
-UNTRUSTED / AGENT-CONTROLLED
---------------------------------
+```text
 LLM reasoning
 prompts
-retrieved documents
+retrieved content
 AuthorizationRequest fields
-delegation objects presented at runtime
-caller identity claims
-tool identity claims
-action arguments
-resource identifiers
+presented DelegationGrant objects
+invoking_principal_id claims
+tool_id claims
+implementation_id claims
+action
+resource
+arguments
+```
 
+### Trusted or canonical
 
-TRUSTED / CANONICAL
---------------------------------
+```text
 Ruhusa authorization core
 StaticPolicyStore
 InMemoryGrantStore
@@ -155,645 +157,732 @@ InMemoryInvocationStore
 InMemoryToolRegistry
 InMemoryAuditLog
 trusted task metadata
-trusted runtime orchestration
+trusted orchestration layer
 ```
 
-The distinction is architectural, not merely conceptual. Whenever a security decision depends
-on provenance, Ruhusa should prefer canonical state over self-asserted request fields.
+The security value of an identifier comes from the canonical object it resolves to, not from the identifier string itself.
 
 ---
 
-## 5. High-Level Architecture
+## 5. High-Level Runtime Architecture
 
-The current architecture through v0.5 development is:
+The orchestration layer and tool registry have different responsibilities.
 
-```
-                    Human / System Principal
-                              |
-                              v
+The orchestrator observes what actually happened. The registry defines which tool implementations are trusted.
+
+```text
+                   Human / System Principal
+                             |
+                             v
                     Trusted Orchestrator
-                              |
-             +----------------+----------------+
-             |                                 |
-             | records invocation              | resolves actual tool
-             v                                 v
-     InMemoryInvocationStore             InMemoryToolRegistry
-             |                                 |
-             +----------------+----------------+
-                              |
-                              v
-                    AuthorizationRequest
-                              |
-                              v
-                  +------------------------+
-                  |        Ruhusa          |
-                  | Authorization Core     |
-                  +-----------+------------+
-                              |
-                              v
-                   1. Task validation
-                              |
-                              v
-                   2. Delegation validation
-                      - chain origin
-                      - identity continuity
-                      - task binding
-                      - temporal validity
-                      - scope attenuation
-                              |
-                              v
-                   3. Grant provenance
-                      InMemoryGrantStore
-                              |
-                              v
-                   4. Invocation provenance
-                      InMemoryInvocationStore
-                      - invoker
-                      - executor
-                      - task
-                      - action
-                      - resource
-                      - arguments digest
-                      - tool identity
-                      - implementation identity
-                      - expiry
-                              |
-                              v
-                   5. Tool identity
-                      InMemoryToolRegistry
-                              |
-                              v
-                   6. Revocation
-                      InMemoryRevocationStore
-                              |
-                              v
-                   7. Effective scope
-                      - action
-                      - resource
-                      - arguments
-                              |
-                              v
-                   8. Policy evaluation
-                      StaticPolicyStore
-                              |
-                              v
-                 +------------+-------------+
-                 |            |             |
-               ALLOW        DENY      REQUIRE_APPROVAL
-                 |
-                 v
-              Tool / API
+                             |
+            +----------------+----------------+
+            |                                 |
+            | records actual invocation       | resolves actual tool
+            v                                 |
+      InvocationRecord                        |
+            |                                 |
+            v                                 |
+  InMemoryInvocationStore                     |
+            |                                 |
+            +---------------+                 |
+                            |                 |
+                            v                 v
+                          Ruhusa <------ InMemoryToolRegistry
+                            |               trusted registrations
+                            |
+                            v
+                   Authorization Decision
 ```
 
-The exact ordering may evolve as the framework matures, but the separation of concerns
-should remain stable.
+The orchestrator does **not** populate the ToolRegistry merely by resolving a tool. Trusted registrations are a separate administrative/canonical concern.
 
 ---
 
-## 6. Core Request Model
+## 6. Current `Ruhusa.authorize()` Order
 
-The `AuthorizationRequest` represents the operation Ruhusa is being asked to evaluate.
-Conceptually, it contains:
+The current implementation evaluates checks in this order:
 
+```text
+AuthorizationRequest
+        |
+        v
+1. Task validity
+        |
+        v
+2. Structural delegation validation
+   - task initiator origin
+   - identity continuity
+   - task binding
+   - grant time validity
+   - scope attenuation
+        |
+        v
+3. Invocation provenance for delegated requests
+   STRONG:
+     InvocationStore lookup
+     invoker
+     executor
+     task
+     action
+     resource
+     arguments digest
+     invocation expiry
+     runtime tool identity
+   WEAK:
+     self-asserted invoking_principal_id consistency
+        |
+        v
+4. Weak-mode tool verification
+   only when ToolRegistry exists
+   and InvocationStore does not
+        |
+        v
+5. Canonical grant provenance
+   GrantStore, when configured
+        |
+        v
+6. Revocation
+        |
+        v
+7. Effective delegated scope
+   action
+   resource
+   arguments
+        |
+        v
+8. Policy evaluation
+        |
+        v
+ALLOW | DENY | REQUIRE_APPROVAL
+        |
+        v
+Audit every exit
 ```
+
+This order reflects the current code, not a normative requirement that future versions must retain exactly the same sequence.
+
+---
+
+## 7. Core Request Model
+
+`AuthorizationRequest` represents the operation being evaluated.
+
+Conceptually:
+
+```text
 AuthorizationRequest
 ├── principal
-├── invoking principal claim
-├── invocation identifier
+├── invoking_principal_id
+├── invocation_id
 ├── task
-├── delegation chain
+├── delegation_chain
 ├── action
 ├── resource
 ├── arguments
-├── tool identity claim
-├── implementation identity claim
+├── tool_id
+├── implementation_id
 └── context
 ```
 
-Not every field has the same trust level.
+These fields do not all have the same trust level.
 
-**Agent-controlled request fields.** Fields such as `action`, `resource`, `arguments`,
-`invoking_principal_id`, `tool_id`, and `implementation_id` may be supplied by an
-agent-controlled workflow. They should therefore be treated as claims unless a trusted
-boundary independently establishes them.
-
-**Trusted runtime references.** Fields such as `invocation_id` can act as references into
-trusted runtime state when backed by `InMemoryInvocationStore`. The security value comes
-from the canonical record retrieved from the store, not from the identifier alone.
+`invoking_principal_id`, `tool_id`, and `implementation_id` are self-asserted in weak mode. `invocation_id` is useful only because it resolves to a canonical record in a trusted store.
 
 ---
 
-## 7. Authorization Core
+## 8. Delegation Architecture
 
-`Ruhusa.authorize()` is the primary authorization boundary. Its job is not merely to match
-a policy rule. It coordinates multiple independent checks: task validity, delegation
-structure, trusted grant provenance, trusted invocation provenance, trusted tool identity,
-revocation, effective action/resource/argument scope, policy, and audit.
+Structural delegation validation is kept separate from runtime provenance.
 
-The authorization core should remain deterministic and independent of LLM reasoning.
+### Chain origin
 
----
+The first grant must originate from `task.initiated_by`.
 
-## 8. Task Validation
+### Identity continuity
 
-Every authorization request executes within a `TaskContext`. Task context provides a bounded
-workflow identity. Typical task properties include `task_id`, `initiated_by`, `purpose`, and
-`expires_at`. The task acts as the root context for delegation. A request is denied when the
-task is expired. Task identity is also used to prevent cross-task authority replay.
-
----
-
-## 9. Delegation Architecture
-
-Delegation allows one principal to transfer a bounded subset of authority to another
-principal. The delegation model enforces structural invariants independently from trusted
-runtime provenance.
-
-### 9.1 Chain Origin
-
-The first grant must originate from the task initiator (`task.initiated_by`). Mismatch →
-DENY.
-
-### 9.2 Identity Continuity
-
-Each delegation hop must connect correctly — the grantee of one grant must equal the grantor
-of the next:
-
-```
+```text
 user-1 -> supervisor-agent -> billing-agent
 ```
 
-### 9.3 Scope Attenuation
+The grantee of each grant must equal the grantor of the next.
 
-Each child grant must remain within the authority of its parent. Scope may include actions,
-resource prefixes, and numeric argument limits.
+### Scope attenuation
 
-### 9.4 Task Binding
+Each child scope must be a subset of its parent.
 
-Every grant in the chain must belong to the current task. This prevents reuse of Task A
-authority under Task B.
+### Task binding
 
-### 9.5 Temporal Validity
+Every grant must belong to the current task.
 
-Delegation grants are bounded by issuance and expiry times. A grant cannot be used before it
-becomes valid, after it expires, or when its validity window is invalid.
+### Temporal validity
 
----
-
-## 10. Trusted Grant Provenance
-
-Structural validity does not prove legitimate issuance. Ruhusa v0.4 introduced
-`InMemoryGrantStore` to establish canonical grant provenance:
-
-```
-Presented DelegationGrant
-          |
-          v
-grant_id registered?
-    |            |
-   NO           YES
-    |            |
-  DENY           v
-          contents match canonical?
-               |          |
-              NO         YES
-               |          |
-             DENY      continue
-```
-
-The key distinction is between "is this grant structurally valid?" and "was this grant
-actually issued?" The grant store answers the second question.
-
-**Grant identity immutability.** Once a `grant_id` is registered, it must not silently
-change meaning. Re-registering the same identity with different grant contents is rejected.
+Each grant must be active at authorization time and have a valid issuance/expiry window.
 
 ---
 
-## 11. Revocation Architecture
+## 9. Trusted Grant Provenance
 
-`InMemoryRevocationStore` tracks revoked grant identities. Revocation is checked during
-authorization rather than only at issuance time:
+v0.4 established that structural validity does not prove legitimate issuance.
 
+`InMemoryGrantStore` provides canonical grant provenance.
+
+```text
+presented grant
+      |
+      v
+registered grant_id?
+   |        |
+  NO       YES
+   |        |
+ DENY       v
+      exact canonical match?
+          |       |
+         NO      YES
+          |       |
+        DENY   continue
 ```
-12:00  grant valid
-12:05  action -> ALLOW
-12:10  grant revoked
-12:11  action -> DENY
+
+This distinguishes:
+
+```text
+Is this grant structurally valid?
 ```
 
-Revocation is checked continuously at protected actions; backend failure fails closed;
-earlier emergency revocation may supersede later scheduled revocation; and revocation records
-are grant-scoped.
+from:
 
-**Descendant limitation.** Ruhusa does not currently maintain a full descendant-revocation
-graph. If a presented chain contains a revoked ancestor, the request is denied. However,
-child grants are not automatically stored as revoked simply because the parent is revoked.
+```text
+Was this grant actually issued?
+```
+
+Grant identifiers are immutable within the registry: a known ID cannot silently be redefined with different authority.
 
 ---
 
-## 12. Invocation Provenance
+## 10. Revocation
 
-v0.5 introduces a distinction between "who is executing?" and "who caused the execution?"
-This distinction matters for confused-deputy attacks.
+`InMemoryRevocationStore` is evaluated during protected delegated actions.
 
-**Weak mode.** A request may contain `invoking_principal_id`. A simple consistency check can
-compare that field with the grantor of the leaf delegation grant. However, a self-asserted
-caller identity is not trusted invocation provenance — an attacker capable of constructing
-the request can forge the field. Weak mode therefore provides consistency checking, not a
-full provenance guarantee.
+```text
+12:00 grant valid
+12:05 action -> ALLOW
+12:10 grant revoked
+12:11 action -> DENY
+```
 
-**Strong mode.** `InMemoryInvocationStore` stores canonical `InvocationRecord` objects
-created by the trusted orchestration layer. A strong invocation record binds: `invocation_id`,
-invoking principal, executing principal, task, action, resource, arguments digest, tool
-identity, implementation identity, `recorded_at`, and `expires_at`. The authorization core
-retrieves the canonical record and verifies it against the live request and delegation chain.
+Properties:
+
+- revocation is re-checked
+- backend failure fails closed
+- earlier emergency revocation may supersede a later scheduled revocation
+- records are grant-scoped
+
+Ruhusa does not yet maintain automatic descendant revocation. A presented chain containing a revoked ancestor is denied, but descendants are not independently marked revoked solely because their parent was revoked.
 
 ---
 
-## 13. Invocation Verification
+## 11. Invocation Provenance
 
-Strong-mode invocation verification conceptually performs:
+v0.5 separates:
 
+```text
+who executes?
 ```
+
+from:
+
+```text
+who caused the execution?
+```
+
+This distinction is essential for confused-deputy analysis.
+
+### Weak mode
+
+For delegated requests without an invocation store, Ruhusa requires `invoking_principal_id` and compares it with the grantor of the leaf delegation grant.
+
+This detects missing or inconsistent caller claims.
+
+It does **not** authenticate the caller. A compromised executing agent can forge the field.
+
+### Strong mode
+
+`InMemoryInvocationStore` contains canonical `InvocationRecord` objects created by the trusted orchestration layer.
+
+The record binds:
+
+```text
+invocation_id
+invoking_principal_id
+executing_principal_id
+task_id
+action
+resource
+arguments_digest
+tool_id
+implementation_id
+recorded_at
+expires_at
+```
+
+The executing agent may know the contents of a record or its identifier. Security does not rely on secrecy. The requirement is that the agent cannot modify the canonical record in the trusted store.
+
+---
+
+## 12. Strong Invocation Verification
+
+For delegated requests in strong mode:
+
+```text
 request.invocation_id
         |
         v
-canonical InvocationRecord exists?    NO --> DENY
+record exists?
+   NO ------> DENY
         |
        YES
         |
         v
-record expired?                       YES --> DENY
+invoker == leaf grantor?
+   NO ------> DENY
         |
         v
-record.invoker == leaf grantor?       NO --> DENY
+executor == request principal?
+   NO ------> DENY
         |
         v
-record.executor == request principal? NO --> DENY
+task == request task?
+   NO ------> DENY
         |
         v
-record.task == request task?          NO --> DENY
+action == request action?
+   NO ------> DENY
         |
         v
-record.action == request action?      NO --> DENY
+resource == request resource?
+   NO ------> DENY
         |
         v
-record.resource == request resource?  NO --> DENY
+arguments digest matches?
+   NO ------> DENY
         |
         v
-record.arguments_digest == live?      NO --> DENY
+record unexpired?
+   NO ------> DENY
         |
         v
-continue
+strong tool check, when applicable
 ```
 
-This architecture prevents a legitimate invocation identifier from becoming a reusable
-bearer token for arbitrary actions.
+Operation binding prevents a valid invocation reference from being reused for a *different* action, resource, or argument set.
+
+It does **not currently establish one-shot consumption**. Exact replay of the same invocation and same operation remains an open benchmark question.
 
 ---
 
-## 14. Argument Binding
+## 13. Argument Binding
 
-Invocation provenance includes a digest of canonicalized action arguments:
+`compute_arguments_digest()` canonicalizes an arguments mapping using sorted JSON and hashes it with SHA-256.
 
+```text
+arguments
+   |
+   v
+canonical JSON
+   |
+   v
+SHA-256
+   |
+   v
+arguments_digest
 ```
-arguments -> canonical serialization -> SHA-256 -> arguments_digest
+
+Ruhusa recomputes the digest from the live request and compares it with the canonical invocation record.
+
+This detects argument substitution such as:
+
+```text
+recorded invocation: refund $250
+live request:         refund $500
 ```
 
-At authorization time, Ruhusa recomputes the digest from the live request and compares it
-with the canonical invocation record. This prevents a replayed invocation (`refund amount =
-250`) from being reused for a substituted one (`refund amount = 500`) even when both values
-are inside ordinary policy bounds.
+even if both values would otherwise satisfy ordinary scope and policy.
 
 ---
 
-## 15. Tool Identity Architecture
+## 14. Tool Identity
 
-v0.5 introduces a distinction between "what operation is requested?" and "which
-implementation will perform it?" An action string such as `issue_refund` does not identify
-executable code.
+An action string does not identify executable code.
 
-Ruhusa models tool identity using a pair such as:
-
-```
-tool_id          = billing-refund-tool
-implementation_id = billing-refund-service:v1
+```text
+action = "issue_refund"
 ```
 
-`InMemoryToolRegistry` defines which canonical tool implementations are trusted and which
-operations they are permitted to perform.
+does not distinguish a trusted implementation from a substitute implementation.
+
+`InMemoryToolRegistry` registers a pair:
+
+```text
+(tool_id, implementation_id)
+```
+
+and the actions that pair may perform.
+
+Example:
+
+```text
+tool_id = billing_refund_tool
+implementation_id = billing_refund_tool@v1.2.0-sha256:abc123
+```
+
+The implementation identifier is canonical application metadata. Ruhusa does not currently provide cryptographic executable attestation.
 
 ---
 
-## 16. Weak vs Strong Tool Verification
+## 15. Weak Tool Verification
 
-**Weak registry mode.** The request presents `(tool_id, implementation_id)` and Ruhusa
-checks whether the pair exists in `InMemoryToolRegistry`. This blocks an openly unregistered
-implementation, but a malicious request could claim the trusted implementation identity.
-Registry membership is not execution provenance.
+When a tool registry is configured **without** an invocation store, Ruhusa requires the request to supply both:
 
-**Strong runtime tool provenance.** The trusted orchestration layer records the actual
-resolved tool identity inside `InvocationRecord`. In strong mode, Ruhusa uses
-`record.tool_id` and `record.implementation_id` as the authoritative runtime identity and
-checks that pair against `InMemoryToolRegistry`:
-
+```text
+tool_id
+implementation_id
 ```
+
+and verifies:
+
+- the pair is registered
+- the pair allows the requested action
+
+This blocks an openly unregistered implementation.
+
+It does not prove that the claimed implementation actually executed. A compromised agent may claim a registered pair while using different code.
+
+---
+
+## 16. Strong Tool Verification
+
+For a **delegated request** with both an invocation store and a tool registry, the authoritative tool identity comes from the canonical `InvocationRecord`.
+
+```text
 Trusted Orchestrator
-        | resolves actual implementation
+        |
+        | observes actual resolved tool
         v
-InvocationRecord (tool_id + implementation_id)
+InvocationRecord
         |
         v
-ToolRegistry -> trusted?
+InvocationStore
+        |
+        v
+Ruhusa
+        |
+        | record.tool_id + record.implementation_id
+        v
+ToolRegistry
+        |
+        v
+trusted and allowed for action?
 ```
 
-This combines runtime provenance with canonical registry, rather than trusting request
-fields alone.
+Self-asserted request tool fields do not override the strong-mode record.
+
+### Current limitation: non-delegated strong mode
+
+Strong invocation verification currently runs inside the delegated-request path.
+
+A direct/non-delegated request with both `InvocationStore` and `ToolRegistry` configured may therefore bypass both the strong invocation path and the weak registry path.
+
+This is an **open v0.5 benchmark case**, not a claimed protection.
+
+### Current limitation: missing canonical tool identity
+
+Strong tool verification currently runs when a canonical invocation record contains a non-`None` `tool_id`.
+
+The behavior for a supposedly tool-mediated operation whose canonical record omits tool identity should be explicitly benchmarked before v0.5 is frozen.
 
 ---
 
 ## 17. Effective Scope
 
-After delegation, provenance, and revocation checks, Ruhusa evaluates the requested
-operation against effective delegated scope. Current scope concepts include action scope
-(only delegated actions permitted), resource scope (only delegated resource prefixes
-permitted), and numeric argument bounds (security-relevant arguments must remain within
-delegated limits). Scope enforcement is independent from trusted invocation and tool
-provenance; v0.5 preserves these earlier controls rather than replacing them.
+Delegated scope enforcement remains independent of provenance controls.
+
+### Action scope
+
+Only delegated actions may execute.
+
+### Resource scope
+
+Only resources inside the effective resource prefixes may be used.
+
+### Argument scope
+
+Numeric and other supported argument constraints must remain inside effective delegated limits.
+
+v0.5 strengthens provenance; it does not replace these earlier controls.
 
 ---
 
 ## 18. Policy Architecture
 
-`StaticPolicyStore` is the current deterministic policy implementation — intentionally small
-and inspectable. A policy may evaluate principal, action, resource, request arguments, and
-deterministic request context. A policy returns ALLOW, DENY, or REQUIRE_APPROVAL. No
-matching policy produces DENY. Policy exceptions also produce DENY.
+`StaticPolicyStore` is intentionally small and deterministic.
 
-The policy interface is intentionally separable from the core request/decision model so
-future adapters can integrate external policy-decision systems without requiring LLM
-involvement in authorization. Potential future adapters include OPA/Rego,
-OpenID AuthZEN-style PDP interfaces, enterprise IAM systems, and custom ABAC engines.
+Policy evaluation may inspect principal, action, resource, arguments, and deterministic request context.
+
+The possible effects are:
+
+```text
+ALLOW
+DENY
+REQUIRE_APPROVAL
+```
+
+No matching rule results in `DENY`. Policy evaluation exceptions also result in `DENY`.
+
+The policy interface is separable from the authorization core so future adapters can integrate external PDPs such as OPA/Rego or AuthZEN-style systems.
 
 ---
 
 ## 19. Human Approval
 
-Ruhusa models REQUIRE_APPROVAL as a first-class authorization outcome. This allows
-deterministic policy to distinguish safe-for-autonomous-execution (ALLOW), forbidden (DENY),
-and allowed-only-after-human-approval (REQUIRE_APPROVAL).
+`REQUIRE_APPROVAL` is a first-class decision effect.
 
-The core framework does not yet provide a full durable approval workflow. A production
-integration would need to address approver authentication, separation of duties, approval
-TTL, approval replay, workflow pause/resume, and durable state.
+Ruhusa does not yet provide a complete approval workflow. A production integration would need durable pause/resume, authenticated approvers, separation of duties, TTL, replay resistance, and durable approval evidence.
 
 ---
 
-## 20. Audit Architecture
+## 20. Audit
 
-`InMemoryAuditLog` records authorization decisions. The audit system is intended to support
-security debugging, experiment analysis, authorization trace reconstruction, correlation of
-denials and allows, and future evaluation metrics. The current audit log is hash-chained —
-not tamper-proof. The current design does not yet provide independent signing, external
-anchoring, or append-only infrastructure.
+`InMemoryAuditLog` records authorization decisions and returns an audit identifier.
+
+The current log is hash-chained.
+
+It is **not** independently signed, externally anchored, or guaranteed tamper-proof.
+
+The audit model is intended for research reconstruction and debugging, not production forensic assurance.
 
 ---
 
 ## 21. Authorization Plane vs Execution Plane
 
-Ruhusa deliberately separates authorization from tool execution:
-
-```
-AUTHORIZATION PLANE                     EXECUTION PLANE
---------------------------------        --------------------------------
-TaskContext                             Agent
-DelegationGrant                           | proposes action
-PolicyStore                               | authorization decision
-GrantStore                                |
-RevocationStore                           +------ DENY
-InvocationStore                           +------ REQUIRE_APPROVAL
-ToolRegistry                              +------ ALLOW
-AuditLog                                              |
-        |                                             v
-        v                                          Tool/API
+```text
+AUTHORIZATION PLANE
+--------------------------------
+TaskContext
+DelegationGrant
+PolicyStore
+GrantStore
+RevocationStore
+InvocationStore
+ToolRegistry
+AuditLog
+        |
+        v
 Ruhusa.authorize()
+
+
+EXECUTION PLANE
+--------------------------------
+Agent
+  |
+  | proposes action
+  v
+authorization decision
+  |
+  +-- DENY
+  +-- REQUIRE_APPROVAL
+  |
+  +-- ALLOW
+        |
+        v
+Protected Tool/API
 ```
 
-Ruhusa does not execute the protected action merely because it understands the action. The
-caller remains responsible for honoring the authorization decision.
+Ruhusa authorizes. It does not itself guarantee that the caller correctly enforces the decision or that the external tool is idempotent.
 
 ---
 
-## 22. Fail-Closed Architecture
+## 22. Fail-Closed Behavior
 
-Fail-closed behavior is enforced around authorization-critical dependencies:
+Authorization-critical lookup failures return `DENY`.
 
+Current fail-closed paths include:
+
+```text
+policy evaluation failure
+revocation lookup failure
+grant-store verification failure
+invocation-store verification failure
+tool-registry verification failure
+task expiry
 ```
-required security lookup
-        |
-        v
-available?   NO --> DENY
-        |
-       YES
-        |
-        v
-continue
-```
 
-Current fail-closed targets include policy evaluation, revocation lookup, canonical grant
-verification, invocation provenance verification, and task validity. The security principle:
-availability failure must not silently become authorization success.
+The principle is:
+
+> **Availability failure must not silently become authorization success.**
 
 ---
 
-## 23. Architectural Evolution
+## 23. Current Open Architecture Questions
 
-```
-v0.1  Deterministic authorization core, default deny, delegation,
-      scope constraints, policy, human approval outcome,
+Before v0.5 is released, the following cases should be represented by adversarial tests:
+
+### Direct/non-delegated strong-mode tool verification
+
+Does a directly authorized principal bypass strong tool checks when both an invocation store and tool registry are configured?
+
+### Exact invocation replay
+
+Operation binding blocks *modified* replay, but the invocation store currently has no one-shot consumption semantics. Should an exact same-operation replay be allowed, denied, or delegated to idempotency controls in the execution layer?
+
+### Missing strong-mode tool identity
+
+If a tool registry is configured but the canonical invocation record contains no tool identity, should the protected operation fail closed?
+
+These are intentionally documented as unresolved research questions rather than security guarantees.
+
+---
+
+## 24. Architectural Evolution
+
+```text
+v0.1  deterministic authorization core
+      default deny
+      delegation
+      scope constraints
+      policy
+      approval effect
       hash-chained audit
 
-v0.2  Continuous revocation, fail-closed revocation state
+v0.2  continuous revocation
+      fail-closed revocation state
 
-v0.3  Task-bound authority, cross-task replay protection
+v0.3  task-bound delegation
+      cross-task replay protection
 
-v0.4  Replanning attack suite, trusted grant provenance,
+v0.4  replanning attack benchmark
+      trusted grant provenance
       canonical grant integrity
 
-v0.5  Invocation provenance, confused-deputy analysis,
-      tool identity, implementation identity,
-      operation-bound invocation records, runtime tool provenance
+v0.5  in development
+      invocation provenance
+      confused-deputy analysis
+      tool identity
+      implementation identity
+      operation-bound invocation records
+      stale invocation rejection
 ```
 
-This progression reflects an important architectural pattern: a security claim represented
-as a request field → adversarial test → self-assertion found insufficient → trusted
-canonical provenance introduced.
+---
+
+## 25. Architectural Invariants
+
+**INV-01 — Default deny.** No matching authorization rule means no authority.
+
+**INV-02 — Fail closed.** Unverifiable required security state yields `DENY`.
+
+**INV-03 — Delegation origin.** Delegation chains begin at the task initiator.
+
+**INV-04 — Identity continuity.** Delegation hops form a continuous principal chain.
+
+**INV-05 — No privilege amplification.** Delegation may narrow, never widen.
+
+**INV-06 — Task binding.** Delegated authority cannot be replayed into another task.
+
+**INV-07 — Temporal validity.** Expired or not-yet-valid authority cannot execute.
+
+**INV-08 — Continuous revocation.** Revoked authority cannot authorize subsequent protected actions when the revoked grant is part of the evaluated chain.
+
+**INV-09 — Earlier revocation wins.** Revocation may move earlier, not later.
+
+**INV-10 — Scoped actions.** Requested actions must fit effective delegated scope.
+
+**INV-11 — Scoped resources.** Requested resources must fit effective delegated scope.
+
+**INV-12 — Scoped arguments.** Security-relevant arguments must fit effective delegated scope.
+
+**INV-13 — Trusted grant provenance.** When canonical issuance verification is configured, structural grant validity alone is insufficient.
+
+**INV-14 — Canonical grant integrity.** Presented grants must match canonical issued contents.
+
+**INV-15 — Grant identity immutability.** A grant identity cannot silently change meaning.
+
+**INV-16 — Auditability.** Authorization outcomes are recorded for reconstruction.
+
+**INV-17 — Trusted invocation provenance.** In strong delegated mode, canonical runtime provenance binds invoker, executor, task, and protected operation.
+
+**INV-18 — Trusted tool execution identity.** In strong delegated mode with a registry, tool authorization uses runtime-observed canonical tool identity rather than self-asserted request fields.
+
+The scope qualifiers on INV-17 and INV-18 are deliberate. v0.5 is still under active benchmark development.
 
 ---
 
-## 24. Current Security State: v0.5 Development
+## 26. Known Architectural Limitations
 
-At the current v0.5 development stage, the architecture supports or is actively testing:
-deterministic authorization, delegation attenuation, task binding, revocation, trusted grant
-provenance, invocation provenance, confused-deputy resistance, tool registry, tool
-implementation identity, operation-bound invocation records, stale invocation rejection, and
-fail-closed security lookups.
+Current limitations include:
 
-Because v0.5 is still under development, these capabilities should be described together
-with their configuration mode and benchmark evidence. In particular, weak / self-asserted
-mode must not be described as equivalent to strong / trusted runtime provenance mode. The
-attack benchmark remains the source of truth for which attack variants have actually been
-demonstrated and blocked. See `docs/attack-benchmarks.md`.
-
----
-
-## 25. Known Architectural Limitations
-
-### 25.1 Production-Grade Durable Stores
-
-Current research stores are primarily in-memory.
-
-### 25.2 Cryptographic Agent Identity
-
-Principal strings are not yet backed by workload identity, signatures, or remote
-attestation.
-
-### 25.3 Cryptographic Tool Attestation
-
-A runtime tool identity is trusted because it is observed by the trusted orchestration
-boundary, not because Ruhusa verifies a hardware- or signature-backed executable identity.
-
-### 25.4 Atomic Authorization + Side Effect
-
-Ruhusa does not yet provide a transaction that atomically combines authorization and
-execution of an external side effect. This leaves future TOCTOU and concurrency research.
-
-### 25.5 Automatic Descendant Revocation
-
-Revocation does not yet propagate through a maintained delegation graph.
-
-### 25.6 Information-Flow Authorization
-
-Ruhusa currently focuses on action authority. It does not yet fully model whether an agent
-is authorized to derive or disclose information produced by combining multiple individually
-authorized data sources.
-
-### 25.7 Durable Human Approval
-
-REQUIRE_APPROVAL is a decision state, not a complete workflow engine.
-
-### 25.8 Trusted-Orchestrator Compromise
-
-The current strong-provenance model assumes the orchestration boundary that writes canonical
-invocation records is trusted. Compromise of that boundary is outside the current guarantee.
+- in-memory research stores
+- no cryptographic agent identity
+- no cryptographic tool attestation
+- no atomic authorization + external side effect
+- no automatic descendant-revocation graph
+- no one-shot invocation consumption
+- no complete information-flow authorization
+- no durable human-approval workflow
+- trusted-orchestrator compromise is outside the current guarantee
+- direct/non-delegated strong-mode tool enforcement is not yet benchmarked
+- canonical missing-tool behavior in strong mode is not yet benchmarked
 
 ---
 
-## 26. Future Architecture Directions
+## 27. Relationship to Other Documents
 
-Future work may introduce: durable GrantStore / RevocationStore / InvocationStore backends;
-distributed consistency experiments; cryptographic invocation records; agent workload
-identity; tool signatures or attestations; authorization-aware workflow engines; LangGraph
-integration; MCP authorization adapters; A2A authorization propagation; OAuth/OIDC-backed
-principal identity; AuthZEN-style policy interfaces; OPA/Rego adapters; OpenTelemetry
-correlation; durable approval workflows; descendant-revocation graphs; concurrency controls;
-information provenance; and derived-data authority.
+```text
+docs/architecture.md
+    -> how the system is structured
 
-These should be introduced only when tied to an explicit threat, invariant, or experiment.
+docs/threat-model.md
+    -> assumptions, threats, and security claims
 
----
+docs/attack-benchmarks.md
+    -> executable evidence
 
-## 27. Architectural Invariants
-
-**INV-01 — Default Deny.** No authorization rule means no authority.
-
-**INV-02 — Fail Closed.** Unverifiable required security state results in denial.
-
-**INV-03 — Delegation Origin.** Delegation chains begin at the task initiator.
-
-**INV-04 — Identity Continuity.** Delegation hops must form a continuous principal chain.
-
-**INV-05 — No Privilege Amplification.** Delegated authority may narrow but not expand.
-
-**INV-06 — Task Binding.** Delegated authority cannot be replayed into another task.
-
-**INV-07 — Temporal Validity.** Expired or not-yet-valid authority cannot execute.
-
-**INV-08 — Continuous Revocation.** Revoked authority cannot authorize subsequent protected
-actions.
-
-**INV-09 — Earlier Revocation Wins.** Revocation may move earlier, not later.
-
-**INV-10 — Scoped Actions.** Only delegated actions are permitted.
-
-**INV-11 — Scoped Resources.** Only delegated resources are permitted.
-
-**INV-12 — Scoped Arguments.** Security-relevant arguments must remain within delegated
-limits.
-
-**INV-13 — Trusted Grant Provenance.** A structurally valid grant is insufficient when
-trusted issuance verification is enabled.
-
-**INV-14 — Canonical Grant Integrity.** Presented grant contents must match canonical issued
-contents.
-
-**INV-15 — Grant Identity Immutability.** A grant identity must not silently change meaning.
-
-**INV-16 — Auditability.** Authorization decisions should be reconstructable.
-
-**INV-17 — Trusted Invocation Provenance.** A delegated execution must correspond to trusted
-runtime provenance binding the immediate invoker, executing principal, task, and protected
-operation.
-
-**INV-18 — Trusted Tool Execution Identity.** When strong runtime provenance is enabled, the
-tool identity used for authorization must come from trusted runtime observation and must
-correspond to a registered tool implementation.
-
----
-
-## 28. Relationship to Threat Model and Benchmarks
-
-The architecture document describes how Ruhusa is structured. The threat model describes
-what Ruhusa assumes and what it protects. The attack benchmark describes what adversarial
-behavior has actually been tested.
-
-```
-Architecture -> Threat Model -> Attack Benchmark -> Executable Tests
+tests/
+    -> concrete verification
 ```
 
-These documents should remain aligned. A new architectural control should not become a
-documented security guarantee until its associated threat and verification experiment exist.
+A control should not become a documented guarantee until an appropriate threat and executable test support the claim.
 
 ---
 
-## 29. Documentation Lifecycle
+## 28. Documentation Lifecycle
 
-`docs/architecture.md` is a living document. It should evolve as the current framework
-architecture changes. Important historical snapshots may be preserved separately.
+`docs/architecture.md` is a living document.
 
-Recommended structure:
+Historical architecture snapshots may be preserved separately, such as:
 
-```
-docs/
-├── architecture.md
-├── architecture/
-│   └── v0.1.md
-├── attack-benchmarks.md
-├── threat-model.md
-└── threat-model/
-    ├── v0.4.md
-    └── v0.5.md
+```text
+docs/architecture/v0.1.md
 ```
 
-The original v0.1 architecture should be preserved as `docs/architecture/v0.1.md` rather
-than overwritten and lost. Versioned threat models should remain frozen after release. The
-canonical architecture should continue to represent the current design.
+Versioned threat models should remain frozen once released.
+
+The frozen v0.4 threat model lives at:
+
+```text
+docs/threat-model/v0.4.md
+```
+
+When v0.5 is complete, the living threat model can be frozen to:
+
+```text
+docs/threat-model/v0.5.md
+```
 
 ---
 
-## 30. Core Architectural Principle
+## 29. Core Architectural Principle
 
-```
+```text
 Agent proposes
       |
       v
@@ -803,7 +892,7 @@ Trusted runtime establishes provenance
 Ruhusa verifies authority
       |
       v
-Policy decides
+Deterministic policy decides
       |
       v
 ALLOW / DENY / REQUIRE_APPROVAL
@@ -812,8 +901,4 @@ ALLOW / DENY / REQUIRE_APPROVAL
 Protected side effect
 ```
 
-Agent intelligence may determine what to attempt. Trusted deterministic authorization
-determines what may execute.
-
-As Ruhusa evolves, the framework extends that principle from isolated tool calls toward
-preservation of legitimate authority across the full workflow that produced them.
+> **Agent intelligence may determine what to attempt. Trusted deterministic authorization determines what may execute.**
