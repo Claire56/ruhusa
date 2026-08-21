@@ -1,16 +1,23 @@
 # Ruhusa Attack Benchmarks
 
 **Status:** Living research artifact  
-**Current development milestone:** v0.5  
-**Primary benchmark files:** `tests/test_replanning_attacks.py`, `tests/test_tool_identity_attacks.py`
+**Current milestone:** v0.5  
+**Current tool/invocation experiment count:** 17
+
+Primary benchmark files:
+
+```text
+tests/test_replanning_attacks.py
+tests/test_tool_identity_attacks.py
+```
 
 ---
 
 ## 1. Purpose
 
-This document records adversarial experiments used to evaluate Ruhusa's authorization model.
+This document records the adversarial experiments used to evaluate Ruhusa.
 
-The benchmark is designed to connect:
+The benchmark connects:
 
 ```text
 security claim
@@ -19,72 +26,68 @@ security claim
 attack
     |
     v
-violated invariant
+observed failure
+    |
+    v
+security invariant
     |
     v
 implementation control
     |
     v
-executable test
-    |
-    v
-observed result
+executable verification
 ```
 
-A security feature is not treated as a meaningful guarantee merely because code exists for it.
+Security controls are not treated as guarantees merely because code exists.
 
 ---
 
-## 2. Outcome Labels
+## 2. Benchmark Labels
 
-### `GAP`
+### GAP
 
-The attack succeeds under the configuration being tested.
+The attack succeeds under the tested configuration.
 
-A `GAP` test intentionally passes when the vulnerable behavior is reproduced.
+A `GAP` test intentionally passes when vulnerable behavior is reproduced.
 
-### `BLOCKS`
+### BLOCKS
 
 Ruhusa rejects the modeled attack under the stated configuration.
 
-### `CONTROL`
+### CONTROL
 
-The experiment confirms that an earlier authorization control still behaves correctly while a new attack family is studied.
+The test confirms an earlier authorization property continues to hold while a new threat family is studied.
 
-A passing test does **not** automatically mean Ruhusa is secure. Always read the benchmark label.
+A passing test is therefore not automatically a successful defense. Its benchmark label matters.
 
 ---
 
-## 3. Research Method
+## 3. Method
 
 ```text
 define threat
     |
     v
-write executable attack
+write attack
     |
     v
-run against baseline
+run baseline
     |
-    +---- blocked ----> identify existing invariant
+    +-- BLOCKED -> document existing invariant
     |
-    +---- succeeds ---> record GAP
-                         |
-                         v
-                    identify root cause
-                         |
-                         v
-                    add smallest control
-                         |
-                         v
-                    rerun attack
+    +-- ALLOW --> record GAP
+                   |
+                   v
+              identify root cause
+                   |
+                   v
+              add smallest control
+                   |
+                   v
+              rerun attack
 ```
 
-After a mitigation succeeds, the next question is:
-
-> How would an attacker adapt after observing the new control?
-
-That follow-on step produced the canonical-grant finding in v0.4 and the self-asserted invocation/tool identity findings in v0.5.
+After a mitigation succeeds, the benchmark asks how the attacker would adapt.
 
 ---
 
@@ -92,7 +95,7 @@ That follow-on step produced the canonical-grant finding in v0.4 and the self-as
 
 ## 4. v0.4 Research Question
 
-> Can an agent recover or expand authority after denial or revocation by delegating, replanning, replaying authority, changing delegation paths, or fabricating replacement grants?
+> Can an agent regain or expand authority after denial or revocation by delegating, replanning, replaying authority, changing delegation paths, or fabricating replacement grants?
 
 Primary file:
 
@@ -102,47 +105,29 @@ tests/test_replanning_attacks.py
 
 ## 5. v0.4 Benchmark Matrix
 
-| ID | Attack | Result | Control | Verification |
-|---|---|---|---|---|
-| V4-01 | Denied agent delegates to bypass denial | `BLOCKS` | Chain must originate from task initiator | `test_denied_agent_cannot_delegate_to_bypass_denial` |
-| V4-02 | Child grant widens parent scope | `BLOCKS` | Per-hop scope attenuation | `test_child_grant_cannot_widen_scope` |
-| V4-03 | Revoked authority reminted with fresh `grant_id` | `BLOCKS` after v0.4 mitigation | Trusted canonical grant issuance | `test_revoked_grant_reuse_via_fresh_chain_is_blocked_by_grant_store` |
-| V4-04 | Cross-task replay | `BLOCKS` | Task binding | `test_cross_task_replay_after_denial` |
-| V4-05 | Alternate delegation path widens authority | `BLOCKS` | Per-hop attenuation | `test_alternate_delegation_path_does_not_widen_effective_authority` |
-| V4-06 | Known grant ID with tampered scope | `BLOCKS` | Canonical full-content equality | `test_registered_id_with_tampered_scope_is_denied` |
-| V4-07 | Grant-store backend failure | `BLOCKS` | Fail closed | `test_grant_store_failure_is_fail_closed` |
+| ID | Attack | Result | Primary Control |
+|---|---|---|---|
+| V4-01 | Delegate after denial | `BLOCKS` | chain origin |
+| V4-02 | Widen child scope | `BLOCKS` | per-hop attenuation |
+| V4-03 | Remint revoked authority under fresh grant ID | `BLOCKS` after mitigation | canonical grant issuance |
+| V4-04 | Cross-task replay | `BLOCKS` | task binding |
+| V4-05 | Alternate delegation path escalation | `BLOCKS` | attenuation + policy |
+| V4-06 | Known grant ID with tampered scope | `BLOCKS` | canonical content equality |
+| V4-07 | Grant-store failure | `BLOCKS` | fail closed |
 
-## 6. v0.4 Experimental Finding
+## 6. v0.4 Finding
 
-The baseline exposed a fresh-grant remint weakness.
-
-```text
-revoked grant
-    |
-    v
-attacker constructs new grant_id
-with equivalent-looking authority
-    |
-    v
-structural validation alone
-cannot establish issuance
-```
-
-The root cause was the difference between:
+The important v0.4 distinction was:
 
 ```text
-Is this grant structurally valid?
+grant looks structurally valid
+    !=
+grant was actually issued
 ```
 
-and:
+That finding introduced `InMemoryGrantStore`.
 
-```text
-Was this grant actually issued?
-```
-
-`InMemoryGrantStore` introduced canonical provenance and exact content matching.
-
-The follow-on tampering attack then established that grant-ID membership alone was insufficient; the presented object must match the canonical issued grant.
+A follow-on attack then showed that grant-ID membership alone was insufficient; the presented grant must match canonical issued content.
 
 ---
 
@@ -150,45 +135,41 @@ The follow-on tampering attack then established that grant-ID membership alone w
 
 ## 7. v0.5 Research Question
 
-> Does authorization remain valid when an allowed operation is redirected through a different tool, caller identity is forged, a privileged agent is used as a confused deputy, or previously valid invocation provenance is replayed or mutated?
+> Does authorization remain valid when caller identity is forged, tools are substituted, runtime identity is misrepresented, or valid invocation provenance is replayed or routed through an unmediated path?
 
-Primary file:
+The current test module documents **17 implemented experiments**.
 
-```text
-tests/test_tool_identity_attacks.py
-```
-
-The current test module documents **sixteen implemented experiments** (Experiments 15 and 16 are running GAP benchmarks; Experiment 17 is a candidate).
+Experiments 15 and 17 now `BLOCK` after the v0.5-C complete-mediation fixes. Experiment 16 remains a documented `GAP` because Ruhusa v0.5.0 does not provide one-shot invocation consumption.
 
 ---
 
-## 8. v0.5 Experiment Matrix
+## 8. Experiment Matrix
 
-| Exp | Scenario | Mode | Result | Verification |
-|---|---|---|---|---|
-| 1 | Authorized action routed through substituted tool | no registry | `GAP` — `ALLOW` | `test_authorized_action_via_substituted_tool_is_not_detected` |
-| 2 | Same logical tool name, different implementation | no registry | `GAP` — `ALLOW` | `test_same_tool_name_different_implementation_is_not_detected` |
-| 3 | Low-privilege caller induces privileged deputy and is truthfully represented | weak consistency | `BLOCKS` — `DENY` | `test_confused_deputy_low_privilege_induces_privileged_agent` |
-| 4 | Completely different action | existing controls | `CONTROL/BLOCKS` — `DENY` | `test_completely_different_action_is_denied` |
-| 5 | Different resource | existing controls | `CONTROL/BLOCKS` — `DENY` | `test_different_resource_is_denied` |
-| 6 | Missing invoking principal on delegated request | weak consistency | `BLOCKS` — `DENY` | `test_missing_invoking_principal_is_denied_for_delegated_action` |
-| 7 | Unregistered substituted tool | registry, weak mode | `BLOCKS` — `DENY` | `test_substituted_tool_is_blocked_by_registry` |
-| 8 | Same logical tool, unregistered implementation | registry, weak mode | `BLOCKS` — `DENY` | `test_same_tool_name_different_implementation_blocked_by_registry` |
-| 9 | Forge `invoking_principal_id` to legitimate leaf grantor | weak mode | `GAP` — `ALLOW` | `test_forged_invoking_principal_bypasses_current_provenance_check` |
-| 10 | Same forged invoker with canonical invocation store | strong delegated mode | `BLOCKS` — `DENY` | `test_forged_invoking_principal_blocked_by_invocation_store` |
-| 11 | Forge registered tool identity while actually using substitute implementation | registry, weak mode | `GAP` — `ALLOW` | `test_forged_tool_identity_bypasses_weak_registry_check` |
-| 12 | Same forged tool identity with canonical runtime record | strong delegated mode + registry | `BLOCKS` — `DENY` | `test_forged_tool_identity_blocked_by_invocation_store` |
-| 13 | Reuse invocation ID with modified arguments | strong delegated mode | `BLOCKS` — `DENY` | `test_operation_substitution_blocked_by_arguments_digest` |
-| 14 | Replay expired invocation record | strong delegated mode | `BLOCKS` — `DENY` | `test_stale_invocation_record_is_denied` |
-| 15 | Non-delegated request bypasses strong-mode tool check | strong mode, no chain | `BLOCKS (v0.5-C)` — `DENY` | `test_non_delegated_request_bypasses_strong_mode_tool_check` |
-| 16 | Exact same-operation invocation replay | strong delegated mode | `GAP` — `ALLOW` | `test_exact_invocation_replay_is_not_prevented` |
-| 17 | Invocation record with `tool_id=None` skips tool verification | strong mode + registry | `BLOCKS (v0.5-C)` — `DENY` | `test_missing_canonical_tool_identity_is_denied` |
+| Exp | Scenario | Result |
+|---|---|---|
+| 1 | Authorized action through substituted tool, no registry | `GAP — ALLOW` |
+| 2 | Same logical tool name, different implementation | `GAP — ALLOW` |
+| 3 | Confused deputy with truthful low-privilege invoker | `BLOCKS — DENY` |
+| 4 | Different action | `CONTROL/BLOCKS — DENY` |
+| 5 | Different resource | `CONTROL/BLOCKS — DENY` |
+| 6 | Missing invoker on delegated request | `BLOCKS — DENY` |
+| 7 | Openly unregistered substituted tool | `BLOCKS — DENY` |
+| 8 | Same tool name, unregistered implementation | `BLOCKS — DENY` |
+| 9 | Forged invoker in weak mode | `GAP — ALLOW` |
+| 10 | Forged invoker with canonical invocation provenance | `BLOCKS — DENY` |
+| 11 | Forged registered tool identity in weak mode | `GAP — ALLOW` |
+| 12 | Forged tool identity with canonical runtime provenance | `BLOCKS — DENY` |
+| 13 | Invocation reused with changed operation arguments | `BLOCKS — DENY` |
+| 14 | Expired invocation replay | `BLOCKS — DENY` |
+| 15 | Direct/non-delegated strong-mode tool bypass | `BLOCKS — DENY` after v0.5-C |
+| 16 | Exact same-operation invocation replay | `GAP — repeated ALLOW` |
+| 17 | Missing canonical tool identity with registry configured | `BLOCKS — DENY` |
 
 ---
 
 ## 9. Experiments 1–2 — Tool Substitution Baseline
 
-The v0.4-style authorization model sees:
+Without trusted tool identity, an authorization layer that sees only:
 
 ```text
 principal
@@ -197,151 +178,104 @@ resource
 arguments
 ```
 
-but not which implementation actually executes.
+cannot distinguish trusted implementation A from substitute implementation B.
 
-Therefore two different implementations can appear identical to authorization.
+These experiments intentionally preserve that baseline.
 
-Result:
+**Result:**
 
 ```text
 GAP
 ```
 
-This established that an action string is not a tool identity.
-
 ---
 
-## 10. Experiment 3 — Initial Confused-Deputy Check
+## 10. Experiment 3 — Confused Deputy Consistency
 
-A low-privilege agent induces `billing-agent` to execute an otherwise authorized refund.
+A low-privilege agent induces a privileged billing agent to act.
 
-When the request truthfully carries:
+When the request truthfully identifies the low-privilege invoker, the invoker does not match the leaf grantor.
 
-```text
-invoking_principal_id = "low-privilege-agent"
-```
-
-and the leaf grant was issued by:
-
-```text
-user-1
-```
-
-the mismatch is denied.
-
-Result:
+**Result:**
 
 ```text
 BLOCKS
 ```
 
-However, this only proves consistency when the caller field is honest.
-
-Experiment 9 demonstrates the adapted attack: forge the caller field.
+This does not authenticate the self-asserted caller. Experiment 9 tests that adaptation.
 
 ---
 
 ## 11. Experiments 4–5 — Existing Scope Controls
 
-These are control cases confirming that earlier protections still hold.
-
-Different action:
+These control experiments verify that:
 
 ```text
-DENY
+wrong action   -> DENY
+wrong resource -> DENY
 ```
 
-Different resource:
-
-```text
-DENY
-```
-
-v0.5 provenance controls are intended to complement, not replace, action/resource scope enforcement.
+v0.5 provenance controls complement rather than replace scope enforcement.
 
 ---
 
-## 12. Experiment 6 — Missing Caller Provenance
+## 12. Experiment 6 — Missing Invoker
 
-A delegated request omits `invoking_principal_id`.
+A delegated weak-mode request omits caller identity.
 
-Weak mode treats omission as a hard failure instead of skipping the check.
+Ruhusa fails closed rather than skipping the check.
 
-Result:
+**Result:**
 
 ```text
 BLOCKS
 ```
 
-This prevents an omission bypass, but does not authenticate a supplied value.
-
 ---
 
-## 13. Experiments 7–8 — Tool Registry
+## 13. Experiments 7–8 — Registry Membership
 
-`InMemoryToolRegistry` introduces canonical registration of:
+`InMemoryToolRegistry` distinguishes registered from openly unregistered:
 
 ```text
 (tool_id, implementation_id)
 ```
 
-and allowed actions.
+pairs.
 
-An openly unregistered implementation is denied.
-
-Result:
+**Result:**
 
 ```text
 BLOCKS
 ```
 
-But the request still self-asserts the pair in weak mode.
-
-Experiment 11 tests that stronger forgery.
+This is registry membership, not execution provenance.
 
 ---
 
 ## 14. Experiment 9 — Forged Invoker
 
-A compromised executing agent knows the leaf grantor and submits:
+The attacker supplies the expected leaf grantor as `invoking_principal_id`.
+
+Weak mode compares matching values but cannot prove the actual runtime caller.
+
+**Result:**
 
 ```text
-invoking_principal_id = "user-1"
+GAP — ALLOW
 ```
-
-even though the true caller is a lower-privilege agent.
-
-Weak mode sees equality and allows the request.
-
-Result:
-
-```text
-GAP
-```
-
-Root cause:
-
-> Equality between two request-visible identities does not authenticate runtime provenance.
 
 ---
 
-## 15. Experiment 10 — Trusted Invocation Provenance
+## 15. Experiment 10 — Canonical Invocation Provenance
 
-Strong mode uses `InMemoryInvocationStore`.
+A trusted orchestration layer records the actual runtime invoker.
 
-The request supplies an `invocation_id`, but the executing agent is assumed unable to modify the canonical `InvocationRecord` associated with that identifier.
+The executing agent may know the record but cannot alter its canonical value under the threat model.
 
-Security does **not** depend on the record being secret.
+A forged request-level caller does not override the trusted record.
 
-The canonical record identifies the actual caller observed by the trusted orchestration layer.
-
-If the real caller is not the leaf grantor:
-
-```text
-DENY
-```
-
-Result:
+**Result:**
 
 ```text
 BLOCKS
@@ -351,264 +285,270 @@ BLOCKS
 
 ## 16. Experiment 11 — Forged Registered Tool Identity
 
-Weak registry mode verifies the request's claimed pair.
+Weak mode trusts request-supplied tool identity enough to perform a registry lookup.
 
-An attacker can therefore claim:
+A compromised agent claims the identity of a registered implementation while actually using another implementation.
 
-```text
-tool_id = registered tool
-implementation_id = registered trusted implementation
-```
-
-while actually executing a substitute implementation.
-
-The registry lookup succeeds because the claimed values are legitimate.
-
-Result:
+**Result:**
 
 ```text
-GAP
+GAP — ALLOW
 ```
 
-Root cause:
+This establishes:
 
-> Registry membership establishes what identities are trusted, not what implementation actually executed.
+> Registry membership is not execution provenance.
 
 ---
 
 ## 17. Experiment 12 — Runtime-Bound Tool Identity
 
-In strong delegated mode, the orchestration layer records the actual tool identity in the canonical `InvocationRecord`.
+The trusted orchestration layer records the actual tool identity in the canonical invocation record.
 
-Ruhusa checks:
+Ruhusa checks that identity against `ToolRegistry`.
 
-```text
-record.tool_id
-record.implementation_id
-```
+Request-supplied tool claims do not override canonical runtime identity.
 
-against `InMemoryToolRegistry`.
-
-Self-asserted request tool fields do not override the record.
-
-Result:
+**Result:**
 
 ```text
 BLOCKS
-```
-
-The stronger construction is:
-
-```text
-trusted runtime observation
-+
-canonical registry
 ```
 
 ---
 
-## 18. Experiment 13 — Operation Substitution
+## 18. Experiment 13 — Modified-Operation Replay
 
-The canonical invocation record binds:
+A valid invocation ID is reused with changed arguments.
 
-```text
-action
-resource
-arguments_digest
-```
+Canonical operation binding detects the mismatch.
 
-The attacker reuses a valid `invocation_id` with changed arguments.
-
-Ruhusa recomputes the argument digest and detects the mismatch.
-
-Result:
+**Result:**
 
 ```text
 BLOCKS
 ```
 
-This proves resistance to **modified-operation replay**.
-
-It does **not** prove one-shot invocation semantics.
+This proves resistance to modified-operation replay, not exact duplicate replay.
 
 ---
 
 ## 19. Experiment 14 — Stale Invocation Replay
 
-The canonical invocation record has its own `expires_at`.
+An expired invocation record is replayed while the broader task may remain active.
 
-A stale invocation is denied even when the parent task remains active.
+Invocation lifetime is independently enforced.
 
-Result:
+**Result:**
 
 ```text
 BLOCKS
 ```
 
-This distinguishes task lifetime from invocation lifetime.
-
 ---
 
-# Part III — v0.5-C Resolutions and Remaining GAP
+## 20. Experiment 15 — Direct/Non-Delegated Complete-Mediation Bypass
 
-## 20. Experiment 15 — Non-Delegated Strong-Mode Tool Bypass
+### Original Gap
 
-**Status:** `BLOCKS (v0.5-C)` — `test_non_delegated_request_bypasses_strong_mode_tool_check`
+The initial strong invocation/tool path was nested inside the delegated-request branch.
 
-**Result:** `BLOCKS` — `DENY`
-
-**Historical GAP:** Before v0.5-C, strong invocation verification ran only inside `if request.delegation_chain:`, so non-delegated requests skipped it. Weak tool verification was also skipped when an InvocationStore was present. Policy decided alone — `ALLOW`.
-
-**v0.5-C fix:** The `if self.invocation_store is not None:` block now applies to all requests regardless of delegation. Only the `invoker == leaf-grantor` check remains inside `if request.delegation_chain:`. Non-delegated requests without an `invocation_id` fail immediately; those with one must pass all canonical record checks including tool identity.
+With:
 
 ```text
 InvocationStore configured
 ToolRegistry configured
 delegation_chain = ()
-no invocation_id supplied
-        |
-        v
-Ruhusa requires canonical InvocationRecord for all requests → DENY (BLOCKS)
 ```
 
-See `docs/threat-model.md` T14.
+a direct request could skip strong verification while also skipping weak tool verification.
+
+The original attack reproduced:
+
+```text
+GAP — ALLOW
+```
+
+### v0.5-C Control
+
+Canonical invocation verification was moved so it applies independently of delegation.
+
+Delegation-specific invoker/leaf-grantor validation remains conditional on a delegation chain.
+
+The attack was rerun.
+
+**Current result:**
+
+```text
+BLOCKS — DENY
+```
+
+### Research Meaning
+
+> A fail-closed security component is insufficient if a valid execution path can avoid invoking it.
+
+This experiment introduces **complete mediation** as a separate concern from provenance.
 
 ---
 
 ## 21. Experiment 16 — Exact Invocation Replay
 
-**Status:** running GAP benchmark — `test_exact_invocation_replay_is_not_prevented`
+Experiment 13 blocks replay when the operation changes.
 
-**Result:** `GAP` — `ALLOW`
-
-Experiment 13 blocks replay with a modified operation (arguments digest mismatch). Experiment 16 tests replay where the operation is identical.
-
-`InMemoryInvocationStore` has no `consume()` method. The same `invocation_id` with identical action, resource, and arguments passes repeatedly.
+Experiment 16 keeps the operation identical:
 
 ```text
-invocation_id = inv-replay-001
-refund $250
-
-request #1 → ALLOW
-request #2 → ALLOW  (GAP)
-request #3 → ALLOW
+same invocation_id
+same action
+same resource
+same arguments
 ```
 
-The benchmark establishes the current contract: Ruhusa does not enforce one-shot invocation semantics. Duplicate-side-effect prevention is currently an execution-layer responsibility. Whether to add `consume()` to `InvocationStore` is deferred to v0.6 research. See `docs/threat-model.md` T15.
+The current invocation store has no one-shot consumption state.
+
+**Current result:**
+
+```text
+GAP — repeated ALLOW
+```
+
+### v0.5 Contract
+
+This is an intentionally documented limitation of v0.5.0.
+
+Ruhusa v0.5.0 provides operation-bound provenance but does not claim:
+
+- one-shot authorization
+- exactly-once execution
+- atomic authorization + side effect
+- downstream idempotency
+
+The issue is deferred to future work on authorization/execution lifecycle semantics.
 
 ---
 
 ## 22. Experiment 17 — Missing Canonical Tool Identity
 
-**Status:** `BLOCKS (v0.5-C)` — `test_missing_canonical_tool_identity_is_denied`
+### Threat
 
-**Result:** `BLOCKS` — `DENY`
+A tool registry is configured, but the canonical invocation record lacks tool identity.
 
-**Historical candidate:** Before v0.5-C, strong tool verification was conditional on `record.tool_id is not None`, so a `None` `tool_id` in the invocation record silently skipped the check. Policy decided alone — `ALLOW`.
+Without a fail-closed requirement, tool verification could be silently skipped.
 
-**v0.5-C fix:** When a tool registry is configured and the canonical record carries `tool_id=None`, the request is denied fail-closed before the registry is consulted. The security contract is explicit: a configured registry is a declared security requirement, and absent tool identity in the record is an authorization failure.
+### v0.5-C Control
+
+When tool verification is required, missing canonical tool identity is now an authorization failure.
+
+**Current result:**
 
 ```text
-InvocationStore configured
-ToolRegistry configured
-InvocationRecord.tool_id = None
-        |
-        v
-Ruhusa: tool identity required when registry configured → DENY (BLOCKS)
+BLOCKS — DENY
 ```
 
-The test covers both delegated and non-delegated requests, confirming that the fail-closed guard applies to all requests when a registry is configured. See `docs/threat-model.md` T16.
+### Research Meaning
+
+> Trusted provenance must be complete enough to support the security decision being made.
 
 ---
 
-# Part IV — Cross-Version Findings
+# Part III — Cross-Version Findings
 
-## 23. Recurring Provenance Pattern
+## 23. Provenance Progression
 
 v0.4:
 
 ```text
-grant looks valid
-    !=
-grant was issued
+valid-looking grant
+!=
+issued grant
 ```
 
 v0.5 caller identity:
 
 ```text
-caller field matches expected identity
-    !=
-caller actually invoked agent
+matching caller field
+!=
+actual invoker
 ```
 
 v0.5 tool identity:
 
 ```text
-claimed tool exists in registry
-    !=
-that implementation actually executed
+registered claimed tool
+!=
+actual implementation
 ```
 
-Emerging principle:
+v0.5-C:
 
-> **Security-relevant identity claims must be grounded in trusted provenance, not merely represented as matching strings inside an agent-controlled request.**
+```text
+correct security control
+!=
+complete mediation
+```
+
+Experiment 16 adds:
+
+```text
+operation-bound provenance
+!=
+execution uniqueness
+```
 
 ---
 
 ## 24. Current Coverage
 
-Executable benchmarks currently cover:
+The benchmark now covers:
 
 - delegation-origin bypass
-- child privilege amplification
-- fresh-grant remint
+- privilege amplification
 - cross-task replay
-- alternate delegation-path escalation
-- canonical grant-content tampering
-- grant-store failure
-- baseline tool substitution
+- fresh-grant remint
+- canonical grant tampering
+- revocation behavior
+- tool substitution
 - logical tool-name collision
-- confused-deputy consistency checks
+- confused-deputy behavior
 - missing invoker
 - forged invoker
-- unregistered tool substitution
 - forged registered tool identity
 - operation substitution
-- stale invocation replay
-- wrong action
-- wrong resource
-- non-delegated tool-verification bypass (BLOCKS — v0.5-C)
-- missing canonical tool identity (BLOCKS — v0.5-C)
-- exact same-operation invocation replay (GAP)
+- stale invocation
+- direct/non-delegated mediation
+- exact invocation replay
+- missing canonical tool identity
 
-The presence of a category does not imply exhaustive coverage of every variant.
+Coverage of a threat category does not imply exhaustive coverage of every possible variant.
 
 ---
 
-## 25. Known Benchmark Gaps
+## 25. Known Remaining Gaps
 
-Experiment 17 has been benchmarked and blocked. Remaining future benchmark areas include:
+Future benchmark areas include:
 
-- TOCTOU between authorization and execution
-- concurrent revocation
+- authorization/execution atomicity
+- one-shot or consumable authority
+- execution idempotency
+- concurrent authorization and revocation
+- TOCTOU
 - multi-agent collusion
-- retry/recovery state mutation
 - descendant revocation
-- human-approval replay
+- durable approval replay
 - distributed-store consistency
 - cryptographic principal identity
 - cryptographic tool attestation
 - trusted-orchestrator compromise
-- branch/merge authorization propagation
+- branch/merge authority propagation
 - information provenance
 - derived-data authority
 - malicious behavior inside a correctly identified trusted tool
 
 ---
 
-## 26. Requirements for New Benchmark Cases
+## 26. Requirements for New Benchmarks
 
-A new security benchmark should identify:
+A new benchmark should identify:
 
 1. threat
 2. preconditions
@@ -620,37 +560,47 @@ A new security benchmark should identify:
 8. legitimate positive path where appropriate
 9. likely attacker adaptation
 
-A new security control should not be documented as a guarantee until a suitable benchmark supports it.
+A security control should not be documented as a guarantee until suitable adversarial evidence exists.
 
 ---
 
-## 27. Running Benchmarks
+## 27. Validation
 
-All tests:
+Run all tests:
 
 ```bash
 uv run pytest
 ```
 
-v0.4 replanning attacks:
+Run the v0.4 benchmark:
 
 ```bash
 uv run pytest tests/test_replanning_attacks.py -v
 ```
 
-v0.5 tool/invocation attacks:
+Run the v0.5 benchmark:
 
 ```bash
 uv run pytest tests/test_tool_identity_attacks.py -v
 ```
 
-Full validation:
+Full v0.5.0 validation:
 
 ```bash
 uv run ruff format .
 uv run ruff check .
 uv run pytest
 uv build
+```
+
+Current release validation baseline:
+
+```text
+27 files left unchanged
+All checks passed
+91 passed
+dist/ruhusa-0.5.0.tar.gz
+dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
 ---
@@ -682,10 +632,10 @@ Executable Verification
 Experimental Result
 ```
 
-Ruhusa's long-term goal is not only to answer:
+The long-term objective is not only:
 
-> Is this tool call allowed?
+> Is this action allowed?
 
-but also:
+but:
 
-> Has the authority represented by this action remained valid throughout the workflow transformations that produced it?
+> Has the authority represented by this action remained valid, correctly mediated, and appropriately bounded throughout the workflow that produced it?

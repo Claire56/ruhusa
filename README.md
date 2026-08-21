@@ -33,17 +33,15 @@ Ruhusa is not an agent framework, workflow engine, identity provider, LLM gatewa
 
 ## Project Status
 
-**Published package version:** `0.3.0`  
-**Current development milestone:** `v0.5` — invocation provenance and tool identity  
+**Current package version:** `0.5.0`  
+**Current research milestone:** `v0.5` — invocation provenance and tool identity  
 **Release status:** pre-1.0 research framework
-
-The package version intentionally remains `0.3.0` while v0.5 is under active adversarial testing. The version will be bumped in a dedicated release step after the v0.5 implementation, tests, documentation, and threat-model snapshot are frozen.
 
 APIs and security guarantees may change before 1.0.
 
-## Current Development Capabilities
+## Current Capabilities
 
-The current development branch includes research implementations for:
+Ruhusa v0.5.0 includes research implementations for:
 
 - deterministic default-deny authorization
 - least-privilege, multi-hop delegation
@@ -56,15 +54,16 @@ The current development branch includes research implementations for:
 - fail-closed policy and security-store failures
 - hash-chained authorization audit records
 - trusted canonical grant issuance via `InMemoryGrantStore`
-- grant-content integrity checks
+- canonical grant-content integrity checks
 - invocation provenance via `InMemoryInvocationStore`
 - operation-bound invocation records
 - invocation expiry
 - tool identity and implementation identity via `InMemoryToolRegistry`
-- weak and strong provenance modes
+- canonical invocation verification for delegated and direct requests
+- fail-closed handling of missing canonical tool identity when tool verification is required
 - adversarial attack benchmarks
 
-Not every configuration provides the same security guarantees. In particular, self-asserted identity fields in weak mode are intentionally retained as compatibility behavior and are explicitly benchmarked as forgeable.
+Not every configuration provides the same security guarantees. Self-asserted identity fields in weak mode remain intentionally benchmarked as forgeable.
 
 ## Research Method
 
@@ -141,7 +140,7 @@ These checks can detect missing or obviously unregistered values, but a compromi
 
 Weak mode is therefore a compatibility and consistency mode, not a trusted provenance boundary.
 
-### Strong delegated mode
+### Strong mode
 
 With `InMemoryInvocationStore`, a trusted orchestration layer creates a canonical `InvocationRecord` that binds:
 
@@ -158,9 +157,11 @@ recorded_at
 expires_at
 ```
 
-For delegated requests, Ruhusa retrieves this canonical record and verifies it against the live request. When a tool registry is also configured and the record contains tool identity, the runtime-observed tool identity is checked against canonical trusted registrations.
+Canonical invocation verification applies to both delegated and direct/non-delegated requests.
 
-The phrase **strong delegated mode** is deliberate. Current v0.5 testing has confirmed that the same strong-tool guarantee does not yet extend automatically to direct/non-delegated requests.
+For delegated requests, Ruhusa additionally verifies that the canonical invoking principal matches the grantor of the leaf delegation grant.
+
+When a tool registry is configured, canonical tool identity must be present and trusted for the requested action.
 
 ## Authorization Flow
 
@@ -181,14 +182,22 @@ AuthorizationRequest
    - scope attenuation
         |
         v
-3. Invocation provenance for delegated requests
-   - strong mode: canonical InvocationRecord
-   - weak mode: self-asserted invoker consistency
+3. Canonical invocation verification
+   - applies to direct and delegated requests
+   - invoker
+   - executor
+   - task
+   - action
+   - resource
+   - arguments digest
+   - expiry
         |
         v
-4. Weak-mode tool verification
-   - only when ToolRegistry exists
-   - and InvocationStore does not
+4. Tool identity verification
+   - canonical runtime identity
+   - fail closed if required identity is missing
+   - registered implementation
+   - action permitted by implementation
         |
         v
 5. Canonical grant provenance
@@ -209,67 +218,61 @@ ALLOW | DENY | REQUIRE_APPROVAL
 Audit decision
 ```
 
-See `docs/architecture.md` for the detailed architecture and current limitations.
+See `docs/architecture.md` for the detailed architecture.
 
-## Current v0.5 Experimental State
+## v0.5 Experimental State
 
-The current tool/invocation benchmark contains **16 implemented experiments**. Experiments 15 and 16 are confirmed `GAP` results; Experiment 17 remains a candidate.
+The current tool/invocation benchmark contains **17 implemented experiments**.
 
-### Confirmed Gap — Experiment 15
+### Experiment 15 — Resolved
 
-A direct/non-delegated request with both `InvocationStore` and `ToolRegistry` configured can currently skip both:
+Experiment 15 originally demonstrated a complete-mediation gap in which a direct/non-delegated request could bypass strong tool verification.
 
-- strong invocation/tool verification, because that path is inside the delegated-request branch; and
-- weak tool verification, because weak mode is skipped whenever an invocation store exists.
+v0.5-C moved canonical invocation verification outside the delegated-only path.
 
-The benchmark currently reproduces:
-
-```text
-non-delegated request
-InvocationStore configured
-ToolRegistry configured
-unregistered substitute tool
-        |
-        v
-ALLOW
-```
-
-This is a confirmed v0.5 gap, not a theoretical concern.
-
-### Confirmed Gap — Experiment 16
-
-Operation binding blocks reuse of an invocation ID for a *different* action, resource, or arguments.
-
-It does not currently provide one-shot invocation consumption.
-
-The same valid `invocation_id` can be reused for the exact same operation:
+**Current result:**
 
 ```text
-request #1 -> ALLOW
-request #2 -> ALLOW
-request #3 -> ALLOW
+BLOCKS — DENY
 ```
 
-The benchmark therefore establishes the current contract:
+### Experiment 16 — Known v0.5 Limitation
 
-> Ruhusa does not currently enforce one-shot invocation semantics.
+Experiment 16 tests exact reuse of a valid invocation ID for the exact same operation.
 
-Whether Ruhusa should add `consume()`-style semantics or explicitly delegate duplicate-side-effect protection to an idempotent execution layer remains an architectural decision for v0.5.
+Operation binding prevents a valid invocation ID from being reused for a different action, resource, or argument set, but Ruhusa v0.5.0 does not provide one-shot invocation consumption.
 
-### Remaining Candidate — Experiment 17
-
-Strong tool verification currently runs when the canonical `InvocationRecord` contains a non-`None` `tool_id`.
-
-The remaining question is what Ruhusa should do when:
+**Current result:**
 
 ```text
-InvocationStore configured
-ToolRegistry configured
-protected operation expected to be tool-mediated
-InvocationRecord.tool_id = None
+GAP — repeated ALLOW
 ```
 
-This case is identified but not yet represented by an executable experiment.
+Ruhusa v0.5.0 therefore does **not** claim exactly-once execution semantics. Duplicate-side-effect prevention remains an execution-layer/idempotency concern unless a future version introduces authorization-consumption semantics.
+
+### Experiment 17 — Resolved
+
+Experiment 17 tests a canonical `InvocationRecord` whose tool identity is missing while `ToolRegistry` is configured.
+
+v0.5-C now fails closed when required canonical tool identity is absent.
+
+**Current result:**
+
+```text
+BLOCKS — DENY
+```
+
+## Validation Baseline
+
+The v0.5.0 release candidate was validated with:
+
+```text
+ruff format: 27 files left unchanged
+ruff check:  All checks passed
+pytest:      91 passed
+build:       dist/ruhusa-0.5.0.tar.gz
+build:       dist/ruhusa-0.5.0-py3-none-any.whl
+```
 
 ## Documentation
 
@@ -279,6 +282,7 @@ The repository separates architecture, security assumptions, and experimental ev
 - [`docs/threat-model.md`](docs/threat-model.md) — current trust assumptions, threats, and security claims
 - [`docs/attack-benchmarks.md`](docs/attack-benchmarks.md) — executable adversarial experiments and outcomes
 - [`docs/threat-model/v0.4.md`](docs/threat-model/v0.4.md) — frozen v0.4 threat-model snapshot
+- [`docs/threat-model/v0.5.md`](docs/threat-model/v0.5.md) — frozen v0.5 threat-model snapshot after release
 - [`docs/architecture/v0.1.md`](docs/architecture/v0.1.md) — historical v0.1 architecture
 
 ## Requirements
@@ -316,13 +320,7 @@ uv run ruff format .
 uv run ruff check .
 ```
 
-Run the example:
-
-```bash
-uv run python examples/refund_demo.py
-```
-
-Build the package:
+Build:
 
 ```bash
 uv build
@@ -335,13 +333,6 @@ uv run ruff format .
 uv run ruff check .
 uv run pytest
 uv build
-```
-
-When dependencies change, commit both:
-
-```text
-pyproject.toml
-uv.lock
 ```
 
 ## Core Usage
@@ -358,7 +349,7 @@ if decision.allowed:
     execute_tool()
 ```
 
-Production-like strong provenance requires a trusted orchestration layer to populate canonical security state rather than allowing executing agents to self-assert that state.
+Strong provenance requires a trusted orchestration layer to populate canonical runtime state rather than allowing executing agents to self-assert that state.
 
 ## Milestones
 
@@ -376,23 +367,13 @@ Bound grants to originating tasks and blocked cross-task replay and chain splici
 
 ### v0.4 — Replanning and Trusted Grant Provenance
 
-Introduced adversarial replanning tests, discovered the fresh-grant remint gap, and added canonical grant issuance and content-integrity verification.
+Introduced adversarial replanning tests, discovered the fresh-grant-remint gap, and added canonical grant issuance and content-integrity verification.
 
-### v0.5 — Invocation Provenance and Tool Identity — in development
+### v0.5 — Invocation Provenance and Tool Identity
 
-Current work studies:
+Added trusted invocation provenance, tool/implementation identity, operation binding, direct-request mediation, and fail-closed canonical tool identity verification.
 
-- confused-deputy attacks
-- forged caller identity
-- tool substitution
-- implementation spoofing
-- operation-bound invocation records
-- stale invocation replay
-- non-delegated strong-mode tool enforcement
-- exact invocation replay semantics
-- missing canonical tool identity
-
-The milestone is not frozen while confirmed GAP results remain unresolved or intentionally unclassified as part of the final security contract.
+The v0.5 milestone intentionally retains one documented limitation: exact same-operation invocation replay is not prevented by one-shot authorization consumption.
 
 ## Research Direction
 
@@ -400,8 +381,18 @@ The working research question is:
 
 > **Under what workflow transformations does authorization cease to represent the authority originally delegated by a principal, and what runtime invariants are required to preserve that authority across delegation, revocation, replanning, concurrency, tool invocation, and information propagation?**
 
-Future benchmark areas include:
+The v0.5 experiments extend that question beyond provenance:
 
+```text
+identity claim != provenance
+provenance != complete mediation
+operation binding != execution uniqueness
+```
+
+Future research areas include:
+
+- authorization/execution atomicity
+- idempotency and one-shot authority
 - concurrency and TOCTOU
 - authorization propagation across branch/merge workflows
 - multi-agent collusion
@@ -420,7 +411,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 See [`SECURITY.md`](SECURITY.md).
 
-Ruhusa is currently a research framework and should not be treated as a production security boundary.
+Ruhusa is a research framework and should not be treated as a production security boundary.
 
 ## License
 
