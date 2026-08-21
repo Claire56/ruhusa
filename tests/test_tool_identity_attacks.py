@@ -8,7 +8,7 @@ Each experiment documents an attack vector and its outcome.
 Tests marked GAP document where no control exists (without a tool registry).
 Tests marked BLOCKS confirm that the named control prevents the attack.
 
-Sixteen experiments:
+Seventeen experiments:
 
   Exp 1 — Authorized action routed through substituted tool
             without registry: GAP: ALLOW
@@ -28,8 +28,9 @@ Sixteen experiments:
   Exp 12 — Forged tool identity blocked by invocation store         BLOCKS (v0.5-A+): DENY
   Exp 13 — Operation substitution blocked by arguments digest       BLOCKS (v0.5-A+): DENY
   Exp 14 — Stale invocation record blocked by expiry                BLOCKS (v0.5-A+): DENY
-  Exp 15 — Non-delegated request bypasses strong-mode tool check    GAP: ALLOW
+  Exp 15 — Non-delegated request bypasses strong-mode tool check    BLOCKS (v0.5-C): DENY
   Exp 16 — Exact same-operation invocation replay                   GAP: ALLOW (no consume)
+  Exp 17 — Invocation record with tool_id=None skips tool check     BLOCKS (v0.5-C): DENY
 """
 
 from datetime import UTC, datetime, timedelta
@@ -1117,55 +1118,43 @@ def test_stale_invocation_record_is_denied() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Experiment 15: Non-delegated request bypasses strong-mode tool check
+# Experiment 15: Non-delegated request — complete mediation after v0.5-C
 #
 # Scenario: Ruhusa is configured with both an InMemoryInvocationStore and an
 # InMemoryToolRegistry — the fully hardened configuration.  A direct (non-
 # delegated) request is submitted: delegation_chain is empty.
 #
-# Code path in core.py:
-#   1. Task valid.
-#   2. validate_delegation_chain → valid (empty chain).
-#   3. ``if request.delegation_chain:`` → False.  All strong-mode invocation
-#      and tool-identity checks are skipped.
-#   4. ``if self.tool_registry is not None and self.invocation_store is None:``
-#      → False (invocation_store IS set).  The weak-mode tool check is also
-#      skipped.
-#   5. Grant store: not configured.
-#   6. Revocation: empty chain, nothing to check.
-#   7. Scope: None (no chain), nothing to check.
-#   8. Policy: billing-agent → issue_refund → ALLOW.
+# Before v0.5-C, the strong-mode invocation block was gated on
+# ``if request.delegation_chain:``, so non-delegated requests skipped it
+# entirely.  The weak-mode tool check was also skipped because the invocation
+# store was configured.  A substitute tool received ALLOW (confirmed GAP).
 #
-# Neither the strong nor the weak tool-identity check covers non-delegated
-# requests when an invocation store is configured.  A substitute (unregistered)
-# tool implementation receives ALLOW even in the fully hardened configuration,
-# provided the request carries no delegation chain.
+# v0.5-C fix: the ``if self.invocation_store is not None:`` check now applies
+# to ALL requests — delegated and direct.  Every request must carry a canonical
+# InvocationRecord.  The delegation-specific invoker==leaf-grantor check is
+# inside the block, conditional on ``if request.delegation_chain:``.
 #
-# This is a gap in the current architecture: tool-identity enforcement is
-# conditioned on the presence of a delegation chain, but a directly-authorized
-# principal can invoke an unregistered implementation without challenge.
+# After the fix a non-delegated request without an invocation_id is denied
+# immediately.  A request with an invocation_id must pass executor, task,
+# operation, and tool-identity checks before policy is consulted.
 #
-# GAP: ALLOW — non-delegated requests bypass tool verification in strong mode.
+# BLOCKS (v0.5-C): DENY — complete mediation now covers non-delegated requests.
 # ---------------------------------------------------------------------------
 
 
 def test_non_delegated_request_bypasses_strong_mode_tool_check() -> None:
     """
-    GAP: When an InvocationStore is configured alongside a ToolRegistry
-    (fully hardened, strong mode), non-delegated requests skip both the
-    strong-mode invocation verification and the weak-mode tool check.
+    BLOCKS (v0.5-C): After the v0.5-C architectural fix, non-delegated requests
+    are no longer exempt from strong-mode invocation and tool-identity checks.
 
-    A substitute (unregistered) tool implementation submits a direct request
-    with no delegation chain.  The tool check is never reached; policy alone
-    decides the outcome → ALLOW.
+    When an InvocationStore is configured, every request must carry a canonical
+    InvocationRecord.  A request without an invocation_id is denied immediately.
+    Both the substitute-tool request and the no-tool-fields request are denied
+    with "invocation id is required".
 
-    This documents the gap: tool-identity enforcement in core.py is
-    gated on ``request.delegation_chain``, so a directly-authorized principal
-    can bypass it entirely.  The architecture must address this before tool
-    identity can be described as unconditionally enforced in strong mode.
-
-    Both the substitute (unregistered) and a request that omits tool fields
-    entirely receive the same outcome — the tool registry is never consulted.
+    Before v0.5-C this function documented a GAP (ALLOW); after the fix it
+    documents BLOCKS (DENY) to preserve the research history and confirm the
+    mitigation.
     """
     task = make_task("task-nondelegated-tool-001")
 
@@ -1176,25 +1165,27 @@ def test_non_delegated_request_bypasses_strong_mode_tool_check() -> None:
         invocation_store=store,
     )
 
-    # Non-delegated request from billing-agent using an unregistered tool.
-    # No delegation_chain means the strong-mode invocation block is skipped,
-    # and the weak-mode tool block is skipped because invocation_store is set.
+    # Attack: non-delegated request with an unregistered tool and no invocation_id.
+    # After v0.5-C the invocation check applies to all requests; the missing
+    # invocation_id is a hard DENY before the tool registry is consulted.
     substitute_req = AuthorizationRequest(
         principal=Principal("billing-agent"),
         action="issue_refund",
         resource="customer:123:billing",
         arguments={"amount": 250},
         task=task,
-        delegation_chain=(),  # no chain — skips all invocation checks
+        delegation_chain=(),
         tool_id="billing_refund_tool",
-        implementation_id=SUBSTITUTE_IMPL_ID,  # unregistered — never checked
+        implementation_id=SUBSTITUTE_IMPL_ID,
     )
     decision = gate.authorize(substitute_req, now=NOW)
 
-    # GAP: policy permits billing-agent; tool identity is never verified.
-    assert decision.effect == DecisionEffect.ALLOW
+    # BLOCKS (v0.5-C): invocation_id is required for all requests when an
+    # invocation store is configured.
+    assert decision.effect == DecisionEffect.DENY
+    assert "invocation id is required" in decision.reason
 
-    # Same result when tool fields are omitted entirely.
+    # Same result when tool fields are omitted.
     no_tool_req = AuthorizationRequest(
         principal=Principal("billing-agent"),
         action="issue_refund",
@@ -1205,7 +1196,54 @@ def test_non_delegated_request_bypasses_strong_mode_tool_check() -> None:
         tool_id=None,
         implementation_id=None,
     )
-    assert gate.authorize(no_tool_req, now=NOW).effect == DecisionEffect.ALLOW
+    no_tool_decision = gate.authorize(no_tool_req, now=NOW)
+    assert no_tool_decision.effect == DecisionEffect.DENY
+    assert "invocation id is required" in no_tool_decision.reason
+
+
+def test_non_delegated_request_with_valid_invocation_is_allowed() -> None:
+    """
+    Positive path for Experiment 15 (v0.5-C): a non-delegated request that
+    carries a valid canonical InvocationRecord with a registered tool identity
+    is authorized normally.
+
+    The invoker check is skipped (no delegation chain); executor, task,
+    operation binding, expiry, and tool identity all pass.  Policy then decides.
+    """
+    task = make_task("task-nondelegated-trusted-001")
+
+    store = InMemoryInvocationStore()
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-nondel-trusted-001",
+            invoking_principal_id="user-1",  # not checked — no delegation chain
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id="billing_refund_tool",
+            implementation_id=TRUSTED_IMPL_ID,
+            recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+    gate = Ruhusa(
+        policy_store=policy_store(),
+        tool_registry=_refund_registry(),
+        invocation_store=store,
+    )
+
+    trusted_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(),
+        invocation_id="inv-nondel-trusted-001",
+    )
+    assert gate.authorize(trusted_req, now=NOW).effect == DecisionEffect.ALLOW
 
 
 # ---------------------------------------------------------------------------
@@ -1297,3 +1335,176 @@ def test_exact_invocation_replay_is_not_prevented() -> None:
     # Third — still ALLOW.
     third = gate.authorize(make_replay_req(), now=NOW)
     assert third.effect == DecisionEffect.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Experiment 17: Invocation record carries tool_id=None with registry configured
+#
+# Scenario: An InvocationStore and a ToolRegistry are both configured (strong
+# mode).  A canonical InvocationRecord is registered, but the orchestration
+# layer omitted tool identity (tool_id=None, implementation_id=None).
+#
+# Before v0.5-C, strong tool verification was conditional on
+# ``record.tool_id is not None``, so a None tool_id silently skipped the check.
+# Policy decided alone, producing ALLOW even in the fully hardened configuration.
+# T16 in the threat model identified this as a candidate gap.
+#
+# v0.5-C fix: when a tool registry is configured and the record carries
+# tool_id=None, Ruhusa returns DENY immediately (fail-closed).  The tool
+# registry is a declared security requirement; an absent tool_id means the
+# operation cannot be verified against it.
+#
+# This test covers both delegated and non-delegated requests, confirming that
+# the fail-closed guard applies to all requests when a registry is configured.
+#
+# BLOCKS (v0.5-C): DENY — missing canonical tool identity is fail-closed.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_canonical_tool_identity_is_denied() -> None:
+    """
+    BLOCKS (v0.5-C): When both an InvocationStore and a ToolRegistry are
+    configured, an InvocationRecord with tool_id=None is rejected fail-closed.
+
+    This closes T16 from the threat model: the earlier ``record.tool_id is not
+    None`` guard allowed tool verification to be silently skipped.  After v0.5-C,
+    a missing tool_id in the canonical record is a hard DENY regardless of
+    whether the request is delegated or direct.
+    """
+    task = make_task("task-notoolid-001")
+    grant = make_grant(
+        grant_id="grant-notoolid",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id=task.task_id,
+    )
+
+    store = InMemoryInvocationStore()
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-notoolid-001",
+            invoking_principal_id="user-1",
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id=None,  # orchestrator omitted tool identity
+            implementation_id=None,
+            recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+    gate = Ruhusa(
+        policy_store=policy_store(),
+        tool_registry=_refund_registry(),
+        invocation_store=store,
+    )
+
+    # Delegated request: record has invoker==leaf-grantor but tool_id=None.
+    delegated_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invocation_id="inv-notoolid-001",
+    )
+    decision = gate.authorize(delegated_req, now=NOW)
+
+    # BLOCKS (v0.5-C): tool_id=None in the canonical record is fail-closed
+    # when a tool registry is configured.
+    assert decision.effect == DecisionEffect.DENY
+    assert "record carries no tool_id" in decision.reason
+
+
+def test_missing_canonical_tool_identity_denied_for_direct_request() -> None:
+    """
+    Non-delegated variant of Experiment 17: the tool_id=None fail-closed guard
+    applies to direct requests too, confirming complete mediation.
+    """
+    task = make_task("task-notoolid-direct-001")
+
+    store = InMemoryInvocationStore()
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-notoolid-direct-001",
+            invoking_principal_id="user-1",
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id=None,
+            implementation_id=None,
+            recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+    gate = Ruhusa(
+        policy_store=policy_store(),
+        tool_registry=_refund_registry(),
+        invocation_store=store,
+    )
+
+    direct_req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(),
+        invocation_id="inv-notoolid-direct-001",
+    )
+    decision = gate.authorize(direct_req, now=NOW)
+    assert decision.effect == DecisionEffect.DENY
+    assert "record carries no tool_id" in decision.reason
+
+
+def test_missing_canonical_tool_identity_positive_path() -> None:
+    """
+    Positive path for Experiment 17: when both a registry and an InvocationStore
+    are configured and the record carries a registered tool_id and implementation_id,
+    authorization proceeds normally.
+    """
+    task = make_task("task-notoolid-positive-001")
+    grant = make_grant(
+        grant_id="grant-notoolid-pos",
+        grantor_id="user-1",
+        grantee_id="billing-agent",
+        task_id=task.task_id,
+    )
+
+    store = InMemoryInvocationStore()
+    store.register(
+        InvocationRecord(
+            invocation_id="inv-notoolid-pos-001",
+            invoking_principal_id="user-1",
+            executing_principal_id="billing-agent",
+            task_id=task.task_id,
+            action="issue_refund",
+            resource="customer:123:billing",
+            arguments_digest=compute_arguments_digest({"amount": 250}),
+            tool_id="billing_refund_tool",
+            implementation_id=TRUSTED_IMPL_ID,
+            recorded_at=NOW,
+            expires_at=NOW + timedelta(minutes=5),
+        )
+    )
+    gate = Ruhusa(
+        policy_store=policy_store(),
+        tool_registry=_refund_registry(),
+        invocation_store=store,
+    )
+
+    req = AuthorizationRequest(
+        principal=Principal("billing-agent"),
+        action="issue_refund",
+        resource="customer:123:billing",
+        arguments={"amount": 250},
+        task=task,
+        delegation_chain=(grant,),
+        invocation_id="inv-notoolid-pos-001",
+    )
+    assert gate.authorize(req, now=NOW).effect == DecisionEffect.ALLOW
