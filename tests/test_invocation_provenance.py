@@ -483,11 +483,16 @@ def test_request_tool_fields_ignored_when_invocation_store_configured() -> None:
 
 
 def test_record_with_no_tool_id_skips_registry_check() -> None:
-    """When record.tool_id is None, no registry check is performed (non-tool invocation)."""
+    """v0.5-C: When record.tool_id is None and a registry is configured, DENY fail-closed.
+
+    Before v0.5-C, tool_id=None in the invocation record caused the registry check to
+    be silently skipped (the guard was ``if record.tool_id is not None``), and policy
+    decided alone → ALLOW.  After v0.5-C, a missing tool_id is fail-closed when a
+    registry is configured; the record must carry tool identity for the check to pass.
+    """
     store = InMemoryInvocationStore()
     store.register(make_record(tool_id=None, implementation_id=None))
 
-    # Registry is configured but irrelevant since the record has no tool.
     gate = Ruhusa(
         policy_store=policy_store(),
         invocation_store=store,
@@ -495,7 +500,9 @@ def test_record_with_no_tool_id_skips_registry_check() -> None:
     )
     decision = gate.authorize(make_request(), now=NOW)
 
-    assert decision.effect == DecisionEffect.ALLOW
+    # v0.5-C: fail-closed — registry configured but record carries no tool_id → DENY.
+    assert decision.effect == DecisionEffect.DENY
+    assert "record carries no tool_id" in decision.reason
 
 
 # ---------------------------------------------------------------------------
@@ -591,11 +598,20 @@ def test_no_store_no_chain_ignores_invocation_fields() -> None:
 
 
 def test_store_no_chain_ignores_invocation_id() -> None:
-    """With a store but no delegation chain, INV-17 does not apply."""
+    """v0.5-C: With a store configured, ALL requests require a canonical InvocationRecord.
+
+    Before v0.5-C, the invocation check was gated on ``if request.delegation_chain:``,
+    so non-delegated requests with an InvocationStore would skip the check entirely
+    and receive ALLOW from policy alone.  After v0.5-C, the check applies to all
+    requests regardless of whether a delegation chain is present.  A non-delegated
+    request with no invocation_id is DENY.
+    """
     store = InMemoryInvocationStore()
     gate = Ruhusa(policy_store=policy_store(), invocation_store=store)
     decision = gate.authorize(
         make_request(with_chain=False, invocation_id=None),
         now=NOW,
     )
-    assert decision.effect == DecisionEffect.ALLOW
+    # v0.5-C: invocation_id required for all requests when a store is configured.
+    assert decision.effect == DecisionEffect.DENY
+    assert "invocation id is required" in decision.reason
