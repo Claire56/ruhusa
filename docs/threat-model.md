@@ -1,8 +1,8 @@
 # Ruhusa Threat Model
 
-**Document status:** Living threat model for the current v0.5 line  
-**Current package version:** 0.5.0  
-**Frozen prior snapshot:** `docs/threat-model/v0.4.md`
+**Document status:** Living threat model for the current v0.6 development line  
+**Current package version:** 0.5.0 during active v0.6 development  
+**Latest frozen threat-model snapshot:** `docs/threat-model/v0.5.md`
 
 ---
 
@@ -10,13 +10,13 @@
 
 This document describes Ruhusa's current trust model, attacker capabilities, security invariants, tested threats, implemented controls, confirmed gaps, and known limitations.
 
-When the v0.5 release is finalized, this content may be frozen as:
+The v0.5.0 release has already been frozen at:
 
 ```text
 docs/threat-model/v0.5.md
 ```
 
-The frozen snapshot should then remain unchanged.
+That historical snapshot must remain unchanged. This living document now tracks validated v0.6 research controls and residual gaps.
 
 Ruhusa's central principles are:
 
@@ -48,6 +48,7 @@ When correctly configured, the research model treats the following as trusted:
 - `InMemoryRevocationStore`
 - `InMemoryInvocationStore`
 - `InMemoryToolRegistry`
+- `InMemoryExecutionStore`
 - trusted task metadata
 - trusted orchestration layer
 - `InMemoryAuditLog` for normal application operation
@@ -71,7 +72,7 @@ The following may be attacker-controlled:
 
 Security does not depend on canonical identifiers or record contents remaining secret.
 
-The central trust assumption is that the executing agent cannot directly modify canonical grant, invocation, revocation, tool-registry, or policy state.
+The central trust assumption is that the executing agent cannot directly modify canonical grant, invocation, revocation, tool-registry, execution-lifecycle, or policy state.
 
 ---
 
@@ -89,6 +90,11 @@ The benchmark attacker may:
 - replay grant IDs
 - replay invocation IDs
 - replay an invocation for the exact same operation
+- race multiple execution attempts for the same invocation
+- reuse stale or forged execution permits
+- trigger retries after uncertain external outcomes
+- cause authority to change after an execution claim
+- exploit revocation, task expiry, or policy change between claim and use
 - attempt direct/non-delegated paths
 - attempt execution after revocation
 - induce privileged agents to act as confused deputies
@@ -188,11 +194,25 @@ When a tool registry is configured, canonical runtime tool identity must be pres
 
 Request-level tool identity claims do not override canonical runtime identity.
 
-### Explicit Non-Invariant — Exactly-Once Execution
+### EXE-01 — Single Active Process-Local Execution Claim
 
-Ruhusa v0.5.0 does not claim that an invocation may authorize only once.
+When `InMemoryExecutionStore` is used through `ExecutionController`, one canonical invocation may have at most one active execution claim in that process.
 
-Experiment 16 confirms exact invocation replay remains possible.
+This is not a distributed-consensus guarantee.
+
+### EXE-02 — Live Authority at the Execution Boundary
+
+A claimed invocation must still satisfy the complete deterministic authorization path immediately before a protected external side effect is attempted.
+
+Execution-time revalidation re-evaluates live task validity, delegation validity, revocation, canonical provenance, tool identity, scope, current policy, and required security-store state.
+
+### Explicit Non-Invariant — Atomic Authorization and Side Effect
+
+Ruhusa does not claim that execution-time revalidation and a remote side effect are one atomic transaction.
+
+Experiment 35 confirms authority may still change after a successful final check and before external use.
+
+Ruhusa also does not claim exactly-once external execution.
 
 ---
 
@@ -330,6 +350,73 @@ v0.5-C now treats required missing canonical tool identity as an authorization f
 **Status:** `BLOCKS — DENY`  
 **Benchmark:** Experiment 17.
 
+### T17 — Duplicate Execution Claim
+
+The same canonical invocation is claimed for execution more than once.
+
+**Status:** `BLOCKS` with `ExecutionController` / `InMemoryExecutionStore`.  
+**Benchmarks:** Experiments 19–21.
+
+The research store provides process-local one-active-claim semantics.
+
+### T18 — Concurrent Process-Local Claim Race
+
+Multiple workers in the same process race to claim the same invocation.
+
+**Status:** `BLOCKS` — exactly one process-local winner in the benchmark.  
+**Benchmark:** Experiment 20.
+
+This does not establish cross-process or distributed consensus.
+
+### T19 — Retry After Uncertain External Outcome
+
+A request may have reached the external system, but the caller cannot determine whether the side effect occurred.
+
+**Status:** `BLOCKS` automatic retry through terminal `UNKNOWN`.  
+**Benchmark:** Experiment 23.
+
+Ruhusa does not currently reconcile `UNKNOWN` automatically.
+
+### T20 — Stale or Forged Execution Permit
+
+A caller attempts to mutate lifecycle state or pass the execution boundary using a stale or fabricated permit.
+
+**Status:** `BLOCKS`.  
+**Benchmarks:** Experiments 24 and 33.
+
+The active `claim_id` and attempt number must match current trusted lifecycle state.
+
+### T21 — Revocation After Claim, Before Use
+
+Authority is valid when execution is claimed but revoked before the protected side effect.
+
+**Baseline status:** `GAP` without execution-time revalidation.  
+**Mitigated status:** `BLOCKS` when `revalidate_before_execution()` is used before the side effect.  
+**Benchmarks:** Experiments 29–30.
+
+### T22 — Task or Policy Becomes Invalid After Claim
+
+The task expires or policy ceases to authorize the operation after execution has already been claimed.
+
+**Status:** `BLOCKS` when execution-time revalidation is used.  
+**Benchmarks:** Experiments 31–32.
+
+### T23 — Execution-Lifecycle State Failure During Revalidation
+
+The execution store cannot determine whether a permit still owns the active claim.
+
+**Status:** `BLOCKS` / fail closed.  
+**Benchmark:** Experiment 34.
+
+### T24 — Revocation After Successful Revalidation
+
+Authority changes after the final successful authorization check but before the remote side effect occurs.
+
+**Status:** `GAP — residual TOCTOU boundary`.  
+**Benchmark:** Experiment 35.
+
+v0.6-B narrows the authorization-to-use window but does not make authorization state and a remote system transactionally atomic.
+
 ---
 
 ## 7. Configuration Modes
@@ -374,7 +461,7 @@ The general rule is:
 
 ---
 
-## 9. Invocation Replay Semantics
+## 9. Invocation Replay and Execution Semantics
 
 Operation binding protects against substitution:
 
@@ -386,7 +473,7 @@ replayed refund 500
 DENY
 ```
 
-but not identical replay:
+`Ruhusa.authorize()` intentionally remains non-consuming, so identical authorization replay remains reproducible:
 
 ```text
 recorded refund 250
@@ -396,7 +483,18 @@ replayed refund 250
 ALLOW
 ```
 
-Therefore v0.5.0 provides operation-bound provenance, not one-shot or exactly-once semantics.
+v0.6-A adds a separate execution lifecycle:
+
+```text
+begin same invocation
+        |
+        +--> first claim: CLAIMED
+        +--> second claim: DENY
+```
+
+This means v0.6 can provide process-local one-active-execution-claim semantics without mutating immutable invocation provenance.
+
+It still does not claim exactly-once external side effects.
 
 ---
 
@@ -411,6 +509,7 @@ The following evaluated failures deny authorization:
 - missing required canonical tool identity
 - untrusted tool implementation
 - tool-registry exception
+- execution-store exception
 - grant-store exception
 - revocation-store exception
 - policy exception
@@ -436,7 +535,44 @@ Ruhusa does not yet maintain automatic descendant revocation.
 
 ---
 
-## 12. Audit
+## 12. Execution-Time Authority
+
+v0.6-B treats a successful execution claim as insufficient evidence that authority remains valid at the instant of use.
+
+A side-effecting integration can call:
+
+```text
+revalidate_before_execution(request, permit)
+```
+
+immediately before a protected side effect.
+
+If the full deterministic authorization path now denies the operation, the execution attempt becomes:
+
+```text
+CANCELLED
+```
+
+`CANCELLED` is terminal for that invocation. If authority is later restored, a new trusted invocation is required.
+
+The control detects changes that occur before revalidation, including:
+
+- grant revocation;
+- task expiry;
+- policy change;
+- invalid delegation;
+- expired canonical invocation;
+- current tool/provenance failure;
+- required security-backend failure.
+
+The control does **not** eliminate the time window after revalidation and before the remote side effect.
+
+Experiment 35 keeps that gap explicit.
+
+---
+
+
+## 13. Audit
 
 Authorization decisions are recorded in a hash-chained in-memory audit log.
 
@@ -446,17 +582,21 @@ It should not be described as tamper-proof.
 
 ---
 
-## 13. Known Limitations
+## 14. Known Limitations
 
-Ruhusa v0.5.0 does not provide:
+The current v0.6 development line does not provide:
 
-- production-grade persistent authorization stores
+- production-grade persistent authorization or execution stores
 - cryptographic principal identity
 - cryptographic tool attestation
 - automatic descendant revocation
-- one-shot invocation consumption
-- exactly-once execution
-- atomic authorization + external side effect
+- distributed execution-claim consensus
+- durable execution-state recovery
+- exactly-once external execution
+- downstream idempotency
+- atomic authorization/revocation + external side effect
+- automatic reconciliation of `UNKNOWN` outcomes
+- prevention of authority change after the final revalidation instant
 - durable human approval
 - comprehensive information-flow authorization
 - protection from trusted-orchestrator compromise
@@ -464,9 +604,11 @@ Ruhusa v0.5.0 does not provide:
 
 Weak mode additionally remains vulnerable to self-asserted caller and tool identity forgery.
 
+The current execution lifecycle demonstrates process-local one-active-claim semantics only.
+
 ---
 
-## 14. Out of Scope
+## 15. Out of Scope
 
 The current framework does not claim to solve:
 
@@ -486,7 +628,7 @@ The current framework does not claim to solve:
 
 ---
 
-## 15. Security Testing Strategy
+## 16. Security Testing Strategy
 
 Ruhusa combines:
 
@@ -517,14 +659,23 @@ Examples:
 - complete-mediation bypass
 - exact replay
 - missing canonical tool identity
+- duplicate execution claim
+- concurrent process-local execution race
+- replay after completion
+- uncertain-outcome retry
+- stale/forged execution permit
+- post-claim revocation
+- post-claim task expiry
+- post-claim policy change
+- residual post-revalidation TOCTOU
 
 See `docs/attack-benchmarks.md`.
 
 ---
 
-## 16. v0.5.0 Validation Baseline
+## 17. Validation Baselines
 
-The release candidate completed:
+Frozen v0.5.0 release validation:
 
 ```text
 uv run ruff format .
@@ -541,34 +692,66 @@ dist/ruhusa-0.5.0.tar.gz
 dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
-Experiment status:
+Current v0.6 development validation after v0.6-A and v0.6-B:
 
 ```text
-Experiment 15 -> BLOCKS
-Experiment 16 -> GAP / documented limitation
-Experiment 17 -> BLOCKS
+uv run ruff format .
+32 files left unchanged
+
+uv run ruff check .
+All checks passed!
+
+uv run pytest
+109 passed in 0.13s
+
+uv build
+dist/ruhusa-0.5.0.tar.gz
+dist/ruhusa-0.5.0-py3-none-any.whl
+```
+
+The package version remains `0.5.0` during active v0.6 development.
+
+Current v0.6 experiment status:
+
+```text
+Exp 18 -> GAP / preserved authorize() baseline
+Exp 19-21 -> BLOCKS
+Exp 22 -> CONTROL
+Exp 23-25 -> BLOCKS
+Exp 26 -> CONTROL
+Exp 27-28 -> BLOCKS
+Exp 29 -> GAP / pre-control temporal baseline
+Exp 30-34 -> BLOCKS
+Exp 35 -> GAP / residual post-revalidation TOCTOU
 ```
 
 ---
 
-## 17. v0.5 Release Boundary
+## 18. v0.6 Development Boundary
 
-The v0.5 security contract intentionally includes the exact-replay limitation.
+The frozen v0.5.0 security contract remains unchanged in `docs/threat-model/v0.5.md`.
 
-The release does not need to claim exactly-once execution in order to be internally consistent.
+The living v0.6 line now experimentally supports:
 
-Future research can investigate:
+- process-local single active execution claims;
+- replay blocking after completion;
+- safe release before a known-unstarted side effect;
+- fail-closed uncertain outcomes;
+- execution-time revalidation of live authority;
+- terminal cancellation when authority becomes invalid before use.
 
-- authorization consumption
-- idempotency keys
-- authorization/execution atomicity
-- retry semantics
-- concurrency
-- TOCTOU
+The current line intentionally retains:
+
+- the non-consuming `authorize()` baseline;
+- no distributed exactly-once guarantee;
+- no atomic authorization/revocation + remote side effect;
+- the residual Experiment 35 TOCTOU gap.
+
+The next research phase may investigate downstream idempotency, distributed execution state, reconciliation, authority epochs/leases, or transactional execution boundaries.
 
 ---
 
-## 18. Research Position
+## 19. Research Position
 
 Ruhusa should not claim novelty merely for default deny, revocation, least privilege, task binding, or deterministic policy enforcement.
 
@@ -576,7 +759,7 @@ The broader research question is:
 
 > **Under what workflow transformations does authorization cease to represent the authority originally delegated by a principal, and what runtime invariants are required to preserve that authority across delegation, revocation, replanning, concurrency, tool invocation, and information propagation?**
 
-The v0.5 experiments identify three related but distinct concerns:
+The experiments identify a growing sequence of distinct concerns:
 
 ```text
 identity claim
@@ -590,13 +773,21 @@ complete mediation
 operation-bound provenance
     !=
 execution uniqueness
+
+authorization-time validity
+    !=
+execution-time validity
+
+execution-time revalidation
+    !=
+atomic authorization + external side effect
 ```
 
-This expands the research from static authorization toward preservation of authority across the lifecycle of an agentic workflow.
+This expands the research from static authorization toward preservation of delegated human authority across the lifecycle of an autonomous agentic workflow.
 
 ---
 
-## 19. Maintenance Rule
+## 20. Maintenance Rule
 
 A security control should not be documented as a guarantee until:
 
@@ -607,10 +798,10 @@ A security control should not be documented as a guarantee until:
 
 A `GAP` should remain visible until it is either mitigated or explicitly accepted as part of the security contract.
 
-After release, freeze this document as:
+The v0.5 historical snapshot is already frozen at:
 
 ```text
 docs/threat-model/v0.5.md
 ```
 
-and do not rewrite that historical snapshot.
+Do not rewrite that snapshot. When v0.6 is eventually released, create a separate frozen v0.6 snapshot from the then-current living threat model.

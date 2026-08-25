@@ -1,14 +1,16 @@
 # Ruhusa Attack Benchmarks
 
 **Status:** Living research artifact  
-**Current milestone:** v0.5  
-**Current tool/invocation experiment count:** 17
+**Current milestone:** v0.6 — execution lifecycle and execution-time authority  
+**Current implemented experiment count:** 35
 
 Primary benchmark files:
 
 ```text
 tests/test_replanning_attacks.py
 tests/test_tool_identity_attacks.py
+tests/test_execution_lifecycle_attacks.py
+tests/test_execution_time_authority_attacks.py
 ```
 
 ---
@@ -451,9 +453,153 @@ BLOCKS — DENY
 
 ---
 
-# Part III — Cross-Version Findings
+# Part III — v0.6 Execution Lifecycle and Execution-Time Authority
 
-## 23. Provenance Progression
+## 23. v0.6 Research Question
+
+> When an operation is correctly authorized, under what execution-lifecycle and timing transformations can that authority be replayed, concurrently reused, become stale, or diverge from the authority that remains valid at the instant of use?
+
+v0.6 is intentionally split into two attack families:
+
+```text
+v0.6-A
+execution uniqueness and lifecycle state
+
+v0.6-B
+execution-time authority validity and TOCTOU
+```
+
+Primary files:
+
+```text
+tests/test_execution_lifecycle_attacks.py
+tests/test_execution_time_authority_attacks.py
+```
+
+## 24. v0.6-A — Execution Lifecycle Matrix
+
+| Exp | Scenario | Observed Result | Primary Control / Meaning |
+|---:|---|---|---|
+| 18 | Exact same invocation replay through `authorize()` | `GAP — repeated ALLOW` | preserved v0.5 baseline; `authorize()` is non-consuming |
+| 19 | Second execution claim for same invocation | `BLOCKS` | process-local atomic claim |
+| 20 | Concurrent claim race | `BLOCKS` | exactly one process-local winner |
+| 21 | Replay after completion | `BLOCKS` | terminal `COMPLETED` state |
+| 22 | Failure known before side effect | `CONTROL — retry allowed` | explicit safe release |
+| 23 | Uncertain external outcome retry | `BLOCKS` | terminal `UNKNOWN` state |
+| 24 | Stale or forged execution permit | `BLOCKS` | active claim ID + attempt binding |
+| 25 | Expired execution authority | `BLOCKS` | canonical invocation expiry |
+| 26 | Authorization denial | `CONTROL — no lifecycle consumption` | claim occurs only after ALLOW |
+| 27 | Execution-store failure | `BLOCKS` | fail closed |
+
+### v0.6-A Finding
+
+The direct before/after comparison is:
+
+```text
+authorize(invocation) -> ALLOW
+authorize(invocation) -> ALLOW
+
+but
+
+begin(invocation) -> CLAIMED
+begin(invocation) -> DENY
+```
+
+This establishes:
+
+> **Operation-bound provenance does not imply execution uniqueness.**
+
+The control is intentionally scoped to the research store. `InMemoryExecutionStore` demonstrates process-local atomic claiming; it does not establish distributed exactly-once semantics.
+
+## 25. v0.6-B — Execution-Time Authority Matrix
+
+| Exp | Scenario | Observed Result | Primary Control / Meaning |
+|---:|---|---|---|
+| 28 | Grant revoked before execution claim | `BLOCKS` | `begin()` re-authorizes before claim |
+| 29 | Grant revoked after claim, no revalidation | `GAP` | reproduces v0.6-A temporal weakness |
+| 30 | Grant revoked after claim, with revalidation | `BLOCKS` | execution-time full authorization check |
+| 31 | Task expires after claim | `BLOCKS` | task validity re-evaluated at use |
+| 32 | Policy removed/changed after claim | `BLOCKS` | current policy re-evaluated at use |
+| 33 | Stale or forged permit at revalidation | `BLOCKS` | active attempt ownership required |
+| 34 | Execution-store failure during revalidation | `BLOCKS` | fail closed |
+| 35 | Revocation after successful revalidation but before use | `GAP` | residual post-check TOCTOU boundary |
+
+### v0.6-B Finding
+
+Experiment 29 shows:
+
+```text
+ALLOW
+  |
+claim
+  |
+revoke
+  |
+complete
+  |
+side effect may still be treated as valid
+```
+
+Experiment 30 repeats the same workflow with the new execution boundary:
+
+```text
+ALLOW
+  |
+claim
+  |
+revoke
+  |
+revalidate
+  |
+DENY -> CANCELLED
+```
+
+This establishes:
+
+> **Authorization-time validity does not imply execution-time validity.**
+
+Experiment 35 then demonstrates the next boundary:
+
+> **Execution-time revalidation does not make authorization state atomic with a remote side effect.**
+
+## 26. v0.6 State Semantics
+
+```text
+AVAILABLE --claim--> CLAIMED --complete--> COMPLETED
+    ^                   |
+    |                   +--uncertain------> UNKNOWN
+    |                   |
+    |                   +--authority invalid-> CANCELLED
+    |
+    +--release-before-side-effect-- CLAIMED
+```
+
+Interpretation:
+
+- `COMPLETED` blocks replay of a known completed execution;
+- `UNKNOWN` blocks automatic retry when the external outcome cannot be determined;
+- `CANCELLED` terminates an invocation whose authority became invalid before use;
+- safe release to `AVAILABLE` is permitted only when the protected side effect is known not to have started.
+
+## 27. v0.6 Explicit Non-Claims
+
+The current benchmark does not establish:
+
+- distributed consensus across workers or pods;
+- exactly-once external side effects;
+- downstream idempotency;
+- durable execution-state recovery;
+- atomic authorization/revocation plus external side effect;
+- reconciliation of `UNKNOWN`;
+- prevention of authority changes after the final revalidation instant.
+
+These are not hidden implementation omissions; they are explicit research boundaries.
+
+---
+
+# Part IV — Cross-Version Findings
+
+## 28. Provenance Progression
 
 v0.4:
 
@@ -495,9 +641,29 @@ operation-bound provenance
 execution uniqueness
 ```
 
+v0.6-A adds:
+
+```text
+authorization ALLOW
+!=
+single execution claim
+```
+
+v0.6-B adds:
+
+```text
+authorization-time validity
+!=
+execution-time validity
+
+execution-time revalidation
+!=
+atomic authorization + side effect
+```
+
 ---
 
-## 24. Current Coverage
+## 29. Current Coverage
 
 The benchmark now covers:
 
@@ -518,20 +684,34 @@ The benchmark now covers:
 - direct/non-delegated mediation
 - exact invocation replay
 - missing canonical tool identity
+- duplicate execution claiming
+- process-local concurrent execution races
+- replay after completion
+- safe pre-side-effect retry
+- uncertain-outcome retry
+- stale/forged execution permits
+- execution authority expiry
+- execution-store failure
+- post-claim revocation
+- post-claim task expiry
+- post-claim policy change
+- execution-time revalidation
+- residual post-revalidation TOCTOU
 
 Coverage of a threat category does not imply exhaustive coverage of every possible variant.
 
 ---
 
-## 25. Known Remaining Gaps
+## 30. Known Remaining Gaps
 
 Future benchmark areas include:
 
-- authorization/execution atomicity
-- one-shot or consumable authority
-- execution idempotency
-- concurrent authorization and revocation
-- TOCTOU
+- atomic authorization/revocation + external side effect
+- downstream idempotency and duplicate-side-effect suppression
+- distributed execution-claim consistency
+- durable execution-state recovery
+- reconciliation of `UNKNOWN` outcomes
+- authority leases / epochs
 - multi-agent collusion
 - descendant revocation
 - durable approval replay
@@ -546,7 +726,7 @@ Future benchmark areas include:
 
 ---
 
-## 26. Requirements for New Benchmarks
+## 31. Requirements for New Benchmarks
 
 A new benchmark should identify:
 
@@ -564,7 +744,7 @@ A security control should not be documented as a guarantee until suitable advers
 
 ---
 
-## 27. Validation
+## 32. Validation
 
 Run all tests:
 
@@ -584,16 +764,14 @@ Run the v0.5 benchmark:
 uv run pytest tests/test_tool_identity_attacks.py -v
 ```
 
-Full v0.5.0 validation:
+Run the v0.6 execution-lifecycle benchmarks:
 
 ```bash
-uv run ruff format .
-uv run ruff check .
-uv run pytest
-uv build
+uv run pytest tests/test_execution_lifecycle_attacks.py -v
+uv run pytest tests/test_execution_time_authority_attacks.py -v
 ```
 
-Current release validation baseline:
+Frozen v0.5.0 release baseline:
 
 ```text
 27 files left unchanged
@@ -603,9 +781,21 @@ dist/ruhusa-0.5.0.tar.gz
 dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
+Current v0.6 development validation after v0.6-A and v0.6-B:
+
+```text
+32 files left unchanged
+All checks passed!
+109 passed in 0.13s
+dist/ruhusa-0.5.0.tar.gz
+dist/ruhusa-0.5.0-py3-none-any.whl
+```
+
+The package version remains `0.5.0` while v0.6 is under active development.
+
 ---
 
-## 28. Research Traceability
+## 33. Research Traceability
 
 ```text
 Research Question
