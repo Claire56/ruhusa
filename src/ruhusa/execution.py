@@ -24,15 +24,17 @@ class ExecutionState(str, Enum):
     CLAIMED = "claimed"
     COMPLETED = "completed"
     UNKNOWN = "unknown"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
 class ExecutionPermit:
     """Opaque proof that one execution attempt won the atomic claim.
 
-    A permit is required for lifecycle transitions after ``claim``.  The
+    A permit is required for lifecycle transitions after ``claim``. The
     ``claim_id`` and ``attempt`` fields prevent an older or unrelated worker
-    from completing, releasing, or marking unknown a newer execution attempt.
+    from completing, releasing, cancelling, or marking unknown a newer
+    execution attempt.
     """
 
     invocation_id: str
@@ -44,7 +46,7 @@ class ExecutionPermit:
 class ExecutionRecord:
     """Mutable-by-store execution state associated with an immutable invocation.
 
-    Invocation provenance remains in ``InMemoryInvocationStore``.  This record
+    Invocation provenance remains in ``InMemoryInvocationStore``. This record
     tracks only whether the already-authorized operation has been claimed or
     used.
 
@@ -55,13 +57,18 @@ class ExecutionRecord:
         Exactly one execution attempt currently owns the invocation.
 
     COMPLETED
-        The protected side effect is reported complete.  Automatic replay is
+        The protected side effect is reported complete. Automatic replay is
         permanently blocked.
 
     UNKNOWN
         The executor cannot determine whether the side effect occurred.
         Automatic retry fails closed until a future reconciliation mechanism
         explicitly resolves the state.
+
+    CANCELLED
+        Execution-time authorization became invalid before the side effect.
+        The old invocation is not automatically resurrected even if policy or
+        authority changes again; a new trusted invocation is required.
     """
 
     invocation_id: str
@@ -73,6 +80,8 @@ class ExecutionRecord:
     completed_at: datetime | None = None
     released_at: datetime | None = None
     unknown_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    cancel_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,13 +105,13 @@ class ExecutionDecision:
 class InMemoryExecutionStore:
     """Thread-safe research implementation of invocation execution state.
 
-    The store provides process-local atomic claim semantics.  Concurrent
+    The store provides process-local atomic claim semantics. Concurrent
     threads racing for the same invocation can produce at most one winning
     permit.
 
     It intentionally does *not* claim distributed consensus, cross-process
-    atomicity, durable crash recovery, or exactly-once external side effects.
-    Those are later v0.6 research boundaries.
+    atomicity, durable crash recovery, atomic authorization with an external
+    side effect, or exactly-once external side effects.
     """
 
     def __init__(self) -> None:
@@ -140,7 +149,7 @@ class InMemoryExecutionStore:
                 )
                 self._records[invocation_id] = record
             elif _as_utc(record.expires_at) != canonical_expiry:
-                # Invocation provenance is immutable.  A different expiry for
+                # Invocation provenance is immutable. A different expiry for
                 # the same invocation id indicates inconsistent trusted state.
                 return ExecutionClaimResult(
                     allowed=False,
@@ -166,6 +175,8 @@ class InMemoryExecutionStore:
                 completed_at=None,
                 released_at=None,
                 unknown_at=None,
+                cancelled_at=None,
+                cancel_reason=None,
             )
             self._records[invocation_id] = updated
 
@@ -179,6 +190,12 @@ class InMemoryExecutionStore:
                     attempt=attempt,
                 ),
             )
+
+    def is_active(self, permit: ExecutionPermit) -> bool:
+        """Return whether ``permit`` still owns the current CLAIMED attempt."""
+        with self._lock:
+            record = self._records.get(permit.invocation_id)
+            return self._owns_active_claim(record, permit)
 
     def complete(
         self,
@@ -210,7 +227,7 @@ class InMemoryExecutionStore:
         """Release only when the protected side effect definitely did not start.
 
         This transition is intended for failures known to occur before any
-        external request or side effect.  If the outcome may have occurred,
+        external request or side effect. If the outcome may have occurred,
         callers must use ``mark_unknown`` instead.
         """
         now = _as_utc(now or datetime.now(UTC))
@@ -249,6 +266,37 @@ class InMemoryExecutionStore:
             )
             return True
 
+    def cancel(
+        self,
+        permit: ExecutionPermit,
+        *,
+        reason: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Cancel an active claim whose authority became invalid before use.
+
+        Cancellation is terminal for the invocation. A caller that later
+        obtains authority again must obtain a new canonical invocation rather
+        than resurrecting the old one.
+        """
+        if not reason.strip():
+            raise ValueError("cancellation reason must not be empty")
+
+        now = _as_utc(now or datetime.now(UTC))
+
+        with self._lock:
+            record = self._records.get(permit.invocation_id)
+            if not self._owns_active_claim(record, permit):
+                return False
+
+            self._records[permit.invocation_id] = replace(
+                record,
+                state=ExecutionState.CANCELLED,
+                cancelled_at=now,
+                cancel_reason=reason,
+            )
+            return True
+
     @staticmethod
     def _owns_active_claim(
         record: ExecutionRecord | None,
@@ -268,14 +316,23 @@ class ExecutionController:
     ``authorize`` remains deliberately non-consuming so the v0.5 baseline and
     Experiment 16 remain reproducible.
 
-    Side-effecting integrations that opt into v0.6 execution protection should
-    call ``begin`` and execute the protected operation only when a permit is
-    returned.
+    Side-effecting integrations that opt into v0.6 execution protection should:
+
+    1. call ``begin`` to authorize and atomically claim the invocation;
+    2. call ``revalidate_before_execution`` immediately before the protected
+       side effect;
+    3. execute only when revalidation returns ``allowed=True``;
+    4. call ``complete`` after a known successful side effect, or
+       ``mark_unknown`` if the external outcome cannot be determined.
 
     This separates:
 
         InvocationStore -> what operation was authentically created?
         ExecutionStore  -> has that operation's execution authority been used?
+
+    v0.6-B reduces the authorization-to-use time-of-check/time-of-use window by
+    re-evaluating live authority at the execution boundary. It does not make
+    that revalidation atomic with an external system's side effect.
     """
 
     def __init__(
@@ -354,6 +411,76 @@ class ExecutionController:
             reason=claim.reason,
             authorization=authorization,
             permit=claim.permit,
+        )
+
+    def revalidate_before_execution(
+        self,
+        request: AuthorizationRequest,
+        permit: ExecutionPermit,
+        *,
+        now: datetime | None = None,
+    ) -> ExecutionDecision:
+        """Re-check live authority immediately before the protected side effect.
+
+        The request is sent through the full Ruhusa authorization path again so
+        task expiry, delegation validity, revocation, trusted provenance, tool
+        identity, scope, and current policy are evaluated at execution time.
+
+        If authority is no longer valid, the active claim is moved to the
+        terminal ``CANCELLED`` state. The old invocation must not be reused.
+
+        A successful result means authority was valid at this revalidation
+        point. It is *not* a guarantee that authority cannot change immediately
+        afterward; the remaining post-check TOCTOU window is an explicit v0.6
+        research boundary.
+        """
+        now = _as_utc(now or datetime.now(UTC))
+        authorization = self.authorizer.authorize(request, now=now)
+
+        if not authorization.allowed:
+            try:
+                self.execution_store.cancel(
+                    permit,
+                    reason=f"execution-time authorization denied: {authorization.reason}",
+                    now=now,
+                )
+            except Exception:
+                # The authorization decision is already DENY. A lifecycle
+                # backend failure must never convert that result into ALLOW.
+                pass
+
+            return ExecutionDecision(
+                allowed=False,
+                reason=f"execution-time authorization denied: {authorization.reason}",
+                authorization=authorization,
+            )
+
+        if request.invocation_id != permit.invocation_id:
+            return ExecutionDecision(
+                allowed=False,
+                reason="execution permit is bound to a different invocation",
+                authorization=authorization,
+            )
+
+        try:
+            if not self.execution_store.is_active(permit):
+                return ExecutionDecision(
+                    allowed=False,
+                    reason="execution permit is not the active claimed attempt",
+                    authorization=authorization,
+                )
+        except Exception:
+            return ExecutionDecision(
+                allowed=False,
+                reason="execution lifecycle state unavailable during revalidation; default deny",
+                authorization=authorization,
+            )
+
+        return ExecutionDecision(
+            allowed=True,
+            reason="execution-time authority remains valid",
+            authorization=authorization,
+            permit=permit,
         )
 
     def complete(
