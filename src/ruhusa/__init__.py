@@ -1,5 +1,14 @@
 from .audit import AuditEvent, InMemoryAuditLog
 from .core import Ruhusa
+from .execution import (
+    ExecutionClaimResult,
+    ExecutionController,
+    ExecutionDecision,
+    ExecutionPermit,
+    ExecutionRecord,
+    ExecutionState,
+    InMemoryExecutionStore,
+)
 from .grants import InMemoryGrantStore
 from .invocations import InMemoryInvocationStore, InvocationRecord, compute_arguments_digest
 from .models import (
@@ -21,7 +30,14 @@ __all__ = [
     "AuthorizationRequest",
     "DecisionEffect",
     "DelegationGrant",
+    "ExecutionClaimResult",
+    "ExecutionController",
+    "ExecutionDecision",
+    "ExecutionPermit",
+    "ExecutionRecord",
+    "ExecutionState",
     "InMemoryAuditLog",
+    "InMemoryExecutionStore",
     "InMemoryGrantStore",
     "InMemoryInvocationStore",
     "InMemoryRevocationStore",
