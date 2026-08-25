@@ -218,3 +218,4 @@ __marimo__/
 .streamlit/secrets.toml
 .DS_Store
 LICENSE_NOTE.txt
+ruhusa-v0.6-A.patch
