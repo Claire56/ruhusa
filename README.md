@@ -34,14 +34,18 @@ Ruhusa is not an agent framework, workflow engine, identity provider, LLM gatewa
 ## Project Status
 
 **Current package version:** `0.5.0`  
-**Current research milestone:** `v0.5` — invocation provenance and tool identity  
+**Latest released version:** `v0.5.0`  
+**Current research milestone:** `v0.6` — execution lifecycle and execution-time authority  
+**Milestone status:** active research development  
 **Release status:** pre-1.0 research framework
+
+The package version intentionally remains `0.5.0` while v0.6 is under active research development. The version will be bumped only when the v0.6 milestone is complete, validated, documented, and frozen.
 
 APIs and security guarantees may change before 1.0.
 
 ## Current Capabilities
 
-Ruhusa v0.5.0 includes research implementations for:
+Ruhusa currently includes research implementations for:
 
 - deterministic default-deny authorization
 - least-privilege, multi-hop delegation
@@ -61,6 +65,13 @@ Ruhusa v0.5.0 includes research implementations for:
 - tool identity and implementation identity via `InMemoryToolRegistry`
 - canonical invocation verification for delegated and direct requests
 - fail-closed handling of missing canonical tool identity when tool verification is required
+- execution lifecycle state via `InMemoryExecutionStore`
+- atomic process-local execution claims and `ExecutionPermit`
+- replay blocking after a claimed invocation is completed
+- safe release when failure is known to occur before an external side effect
+- fail-closed `UNKNOWN` state for uncertain external outcomes
+- execution-time authorization revalidation before protected side effects
+- terminal `CANCELLED` state when live authority becomes invalid before execution
 - adversarial attack benchmarks
 
 Not every configuration provides the same security guarantees. Self-asserted identity fields in weak mode remain intentionally benchmarked as forgeable.
@@ -114,6 +125,7 @@ InMemoryGrantStore
 InMemoryRevocationStore
 InMemoryInvocationStore
 InMemoryToolRegistry
+InMemoryExecutionStore
 InMemoryAuditLog
 trusted orchestration state
 ```
@@ -220,51 +232,61 @@ Audit decision
 
 See `docs/architecture.md` for the detailed architecture.
 
-## v0.5 Experimental State
+## v0.6 Experimental State
 
-The current tool/invocation benchmark contains **17 implemented experiments**.
+The current benchmark contains **35 implemented experiments** across delegation, provenance, tool identity, execution lifecycle, and execution-time authority.
 
-### Experiment 15 — Resolved
+### v0.6-A — Execution Lifecycle
 
-Experiment 15 originally demonstrated a complete-mediation gap in which a direct/non-delegated request could bypass strong tool verification.
+Experiments 18–27 preserve the v0.5 exact-replay baseline and add a separate execution lifecycle.
 
-v0.5-C moved canonical invocation verification outside the delegated-only path.
-
-**Current result:**
+Key observed results:
 
 ```text
-BLOCKS — DENY
+Exp 18  exact replay through authorize()                   GAP
+Exp 19  second execution claim                            BLOCKS
+Exp 20  concurrent process-local claim race               BLOCKS
+Exp 21  replay after completion                           BLOCKS
+Exp 22  known pre-side-effect release and retry           CONTROL
+Exp 23  uncertain external outcome retry                  BLOCKS
+Exp 24  stale/forged execution permit                     BLOCKS
+Exp 25  expired execution authority                       BLOCKS
+Exp 26  authorization DENY does not consume execution     CONTROL
+Exp 27  execution-store failure                           BLOCKS
 ```
 
-### Experiment 16 — Known v0.5 Limitation
+The research distinction is:
 
-Experiment 16 tests exact reuse of a valid invocation ID for the exact same operation.
+> **Operation-bound provenance is not execution uniqueness.**
 
-Operation binding prevents a valid invocation ID from being reused for a different action, resource, or argument set, but Ruhusa v0.5.0 does not provide one-shot invocation consumption.
+`Ruhusa.authorize()` intentionally remains non-consuming so the v0.5 baseline stays reproducible. Side-effecting integrations opt into the execution lifecycle through `ExecutionController`.
 
-**Current result:**
+### v0.6-B — Execution-Time Authority Validity
+
+Experiments 28–35 test whether authority that was valid when execution was claimed is still valid immediately before an external side effect.
+
+Observed results:
 
 ```text
-GAP — repeated ALLOW
+Exp 28  revocation before execution claim                 BLOCKS
+Exp 29  revocation after claim without revalidation       GAP
+Exp 30  post-claim revocation with revalidation           BLOCKS
+Exp 31  task expiry after claim                           BLOCKS
+Exp 32  policy change after claim                         BLOCKS
+Exp 33  stale/forged permit at revalidation               BLOCKS
+Exp 34  execution-state failure during revalidation       BLOCKS
+Exp 35  revocation after successful revalidation          GAP
 ```
 
-Ruhusa v0.5.0 therefore does **not** claim exactly-once execution semantics. Duplicate-side-effect prevention remains an execution-layer/idempotency concern unless a future version introduces authorization-consumption semantics.
+Experiment 35 is intentionally preserved as a residual TOCTOU boundary. v0.6-B narrows the authorization-to-use window but does not make authorization state atomic with a remote side effect.
 
-### Experiment 17 — Resolved
+The research distinction is:
 
-Experiment 17 tests a canonical `InvocationRecord` whose tool identity is missing while `ToolRegistry` is configured.
+> **Authorization-time validity is not execution-time validity, and execution-time revalidation is not atomic authorization plus side effect.**
 
-v0.5-C now fails closed when required canonical tool identity is absent.
+## Validation Baselines
 
-**Current result:**
-
-```text
-BLOCKS — DENY
-```
-
-## Validation Baseline
-
-The v0.5.0 release candidate was validated with:
+Frozen v0.5.0 release baseline:
 
 ```text
 ruff format: 27 files left unchanged
@@ -274,6 +296,18 @@ build:       dist/ruhusa-0.5.0.tar.gz
 build:       dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
+Current v0.6 development baseline after v0.6-A and v0.6-B:
+
+```text
+ruff format: 32 files left unchanged
+ruff check:  All checks passed
+pytest:      109 passed
+build:       dist/ruhusa-0.5.0.tar.gz
+build:       dist/ruhusa-0.5.0-py3-none-any.whl
+```
+
+The `0.5.0` build artifact name is expected during active v0.6 development because the package version has not yet been bumped.
+
 ## Documentation
 
 The repository separates architecture, security assumptions, and experimental evidence:
@@ -282,7 +316,9 @@ The repository separates architecture, security assumptions, and experimental ev
 - [`docs/threat-model.md`](docs/threat-model.md) — current trust assumptions, threats, and security claims
 - [`docs/attack-benchmarks.md`](docs/attack-benchmarks.md) — executable adversarial experiments and outcomes
 - [`docs/threat-model/v0.4.md`](docs/threat-model/v0.4.md) — frozen v0.4 threat-model snapshot
-- [`docs/threat-model/v0.5.md`](docs/threat-model/v0.5.md) — frozen v0.5 threat-model snapshot after release
+- [`docs/threat-model/v0.5.md`](docs/threat-model/v0.5.md) — frozen v0.5 threat-model snapshot
+- [`docs/research/v0.6-A-execution-lifecycle.md`](docs/research/v0.6-A-execution-lifecycle.md) — execution-lifecycle research note
+- [`docs/research/v0.6-B-execution-time-authority.md`](docs/research/v0.6-B-execution-time-authority.md) — execution-time authority research note
 - [`docs/architecture/v0.1.md`](docs/architecture/v0.1.md) — historical v0.1 architecture
 
 ## Requirements
@@ -311,6 +347,8 @@ Run the attack benchmarks:
 ```bash
 uv run pytest tests/test_replanning_attacks.py -v
 uv run pytest tests/test_tool_identity_attacks.py -v
+uv run pytest tests/test_execution_lifecycle_attacks.py -v
+uv run pytest tests/test_execution_time_authority_attacks.py -v
 ```
 
 Format and lint:
@@ -351,6 +389,23 @@ if decision.allowed:
 
 Strong provenance requires a trusted orchestration layer to populate canonical runtime state rather than allowing executing agents to self-assert that state.
 
+For side-effecting integrations using the v0.6 execution lifecycle:
+
+```python
+from ruhusa import ExecutionController
+
+controller = ExecutionController(gate)
+
+claim = controller.begin(request)
+if claim.allowed and claim.permit is not None:
+    live = controller.revalidate_before_execution(request, claim.permit)
+    if live.allowed:
+        # Execute the protected side effect here.
+        controller.complete(claim.permit)
+```
+
+If the external outcome becomes uncertain after the request is sent, use `mark_unknown()` rather than automatically retrying. v0.6 does not claim atomic authorization plus external side effect or exactly-once downstream execution.
+
 ## Milestones
 
 ### v0.1 — Deterministic Authorization Core
@@ -375,25 +430,37 @@ Added trusted invocation provenance, tool/implementation identity, operation bin
 
 The v0.5 milestone intentionally retains one documented limitation: exact same-operation invocation replay is not prevented by one-shot authorization consumption.
 
+### v0.6 — Execution Lifecycle and Execution-Time Authority
+
+v0.6-A adds execution claims, replay controls, completion/unknown/cancelled lifecycle state, and process-local concurrency protection.
+
+v0.6-B adds execution-time revalidation so revocation, task expiry, and policy changes that occur after a claim can be observed immediately before use.
+
+The current residual boundary is deliberate: revalidation narrows the TOCTOU window but is not atomic with a remote side effect. Downstream idempotency, distributed atomicity, durable reconciliation, and exactly-once effects remain research targets.
+
 ## Research Direction
 
 The working research question is:
 
 > **Under what workflow transformations does authorization cease to represent the authority originally delegated by a principal, and what runtime invariants are required to preserve that authority across delegation, revocation, replanning, concurrency, tool invocation, and information propagation?**
 
-The v0.5 experiments extend that question beyond provenance:
+The research progression now extends beyond provenance into execution semantics:
 
 ```text
 identity claim != provenance
 provenance != complete mediation
 operation binding != execution uniqueness
+authorization-time validity != execution-time validity
+execution-time revalidation != atomic authorization + side effect
 ```
 
-Future research areas include:
+Current and future research areas include:
 
 - authorization/execution atomicity
 - idempotency and one-shot authority
-- concurrency and TOCTOU
+- distributed concurrency and durable execution state
+- reconciliation of uncertain outcomes
+- authority leases / epochs and TOCTOU
 - authorization propagation across branch/merge workflows
 - multi-agent collusion
 - descendant revocation
