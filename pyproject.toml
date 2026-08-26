@@ -32,6 +32,11 @@ classifiers = [
 
 dependencies = []
 
+[project.optional-dependencies]
+postgres = [
+    "psycopg[binary,pool]>=3.2,<4",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
