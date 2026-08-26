@@ -69,8 +69,8 @@ class Ruhusa:
         tool_registry: ToolRegistry | None = None,
         invocation_store: InvocationStore | None = None,
     ) -> None:
-        self.policy_store = policy_store or StaticPolicyStore()
-        self.audit_log = audit_log or InMemoryAuditLog()
+        self.policy_store = policy_store if policy_store is not None else StaticPolicyStore()
+        self.audit_log = audit_log if audit_log is not None else InMemoryAuditLog()
         self.revocation_store = (
             revocation_store if revocation_store is not None else InMemoryRevocationStore()
         )

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from ruhusa import (
     AuthorizationRequest,
     DecisionEffect,
     DelegationGrant,
+    ExecutionClaimResult,
     ExecutionController,
+    ExecutionPermit,
     InMemoryInvocationStore,
     InvocationRecord,
     PolicyRule,
@@ -162,6 +165,26 @@ class FailingExecutionStore:
         raise StoreUnavailableError("execution backend unavailable")
 
 
+class FailingRevalidationStore:
+    """Succeeds on claim but fails on is_active (revalidation path)."""
+
+    def __init__(self):
+        self._claimed = False
+        self._permit = None
+
+    def claim(self, invocation_id, *, expires_at, now=None):
+        permit = ExecutionPermit(
+            invocation_id=invocation_id,
+            claim_id=str(uuid4()),
+            attempt=1,
+        )
+        self._permit = permit
+        return ExecutionClaimResult(allowed=True, reason="claimed", permit=permit)
+
+    def is_active(self, permit):
+        raise StoreUnavailableError("execution backend unavailable during revalidation")
+
+
 def test_policy_store_failure_is_deny_not_bypass() -> None:
     gate = Ruhusa(policy_store=FailingPolicyStore())
     decision = gate.authorize(direct_request(), now=NOW)
@@ -254,3 +277,42 @@ def test_execution_store_failure_denies_execution_admission() -> None:
     )
     assert decision.allowed is False
     assert "execution lifecycle state unavailable" in decision.reason
+
+
+def test_execution_store_failure_during_revalidation_denies() -> None:
+    invocation_store = InMemoryInvocationStore()
+    record = InvocationRecord(
+        invocation_id="inv-revalidation-failure",
+        invoking_principal_id="user-1",
+        executing_principal_id="billing-agent",
+        task_id="task-store-failure",
+        action=ACTION,
+        resource=RESOURCE,
+        arguments_digest=compute_arguments_digest(ARGUMENTS),
+        tool_id=None,
+        implementation_id=None,
+        recorded_at=NOW - timedelta(seconds=1),
+        expires_at=NOW + timedelta(hours=1),
+    )
+    invocation_store.register(record)
+
+    revalidation_store = FailingRevalidationStore()
+    gate = Ruhusa(
+        policy_store=allow_policy(),
+        invocation_store=invocation_store,
+    )
+    controller = ExecutionController(
+        gate,
+        execution_store=revalidation_store,
+    )
+    req = direct_request(invocation_id=record.invocation_id)
+    claim_result = controller.begin(req, now=NOW)
+    assert claim_result.permit is not None
+
+    revalidation = controller.revalidate_before_execution(
+        req,
+        claim_result.permit,
+        now=NOW,
+    )
+    assert revalidation.allowed is False
+    assert "execution lifecycle state unavailable" in revalidation.reason

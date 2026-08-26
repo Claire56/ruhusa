@@ -107,3 +107,30 @@ def test_execution_controller_configuration_error_is_backward_compatible() -> No
 
     with pytest.raises(ValueError):
         ExecutionController(gate)
+
+
+class FalseyPolicyStore:
+    def __bool__(self) -> bool:
+        return False
+
+    def evaluate(self, request):
+        return None
+
+
+class FalseyAuditLog:
+    def __bool__(self) -> bool:
+        return False
+
+    def append(self, request, decision):
+        return "audit-falsey"
+
+
+def test_falsey_protocol_dependencies_are_not_replaced() -> None:
+    policy_store = FalseyPolicyStore()
+    audit_log = FalseyAuditLog()
+    gate = Ruhusa(
+        policy_store=policy_store,
+        audit_log=audit_log,
+    )
+    assert gate.policy_store is policy_store
+    assert gate.audit_log is audit_log
