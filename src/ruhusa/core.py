@@ -6,7 +6,15 @@ from datetime import UTC, datetime
 from .audit import InMemoryAuditLog
 from .delegation import validate_delegation_chain
 from .grants import InMemoryGrantStore
-from .invocations import InMemoryInvocationStore, compute_arguments_digest
+from .interfaces import (
+    AuditLog,
+    GrantStore,
+    InvocationStore,
+    PolicyStore,
+    RevocationStore,
+    ToolRegistry,
+)
+from .invocations import compute_arguments_digest
 from .models import AuthorizationDecision, AuthorizationRequest, DecisionEffect
 from .policy import StaticPolicyStore
 from .revocation import InMemoryRevocationStore, RevocationRecord
@@ -56,12 +64,12 @@ class Ruhusa:
 
     def __init__(
         self,
-        policy_store: StaticPolicyStore | None = None,
-        audit_log: InMemoryAuditLog | None = None,
-        revocation_store: InMemoryRevocationStore | None = None,
-        grant_store: InMemoryGrantStore | None = None,
-        tool_registry: InMemoryToolRegistry | None = None,
-        invocation_store: InMemoryInvocationStore | None = None,
+        policy_store: PolicyStore | None = None,
+        audit_log: AuditLog | None = None,
+        revocation_store: RevocationStore | None = None,
+        grant_store: GrantStore | None = None,
+        tool_registry: ToolRegistry | None = None,
+        invocation_store: InvocationStore | None = None,
     ) -> None:
         self.policy_store = policy_store or StaticPolicyStore()
         self.audit_log = audit_log or InMemoryAuditLog()
@@ -458,5 +466,14 @@ class Ruhusa:
         request: AuthorizationRequest,
         decision: AuthorizationDecision,
     ) -> AuthorizationDecision:
-        audit_id = self.audit_log.append(request, decision)
+        try:
+            audit_id = self.audit_log.append(request, decision)
+        except Exception:
+            # Audit is part of the authorization security boundary.
+            # An unaudited ALLOW must never escape as ALLOW.
+            return AuthorizationDecision(
+                DecisionEffect.DENY,
+                "audit log unavailable; default deny",
+            )
+
         return replace(decision, audit_id=audit_id)

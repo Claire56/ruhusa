@@ -7,6 +7,8 @@ from threading import Lock
 from uuid import uuid4
 
 from .core import Ruhusa
+from .errors import ConfigurationError
+from .interfaces import ExecutionStore
 from .models import AuthorizationDecision, AuthorizationRequest
 
 
@@ -470,10 +472,10 @@ class ExecutionController:
     def __init__(
         self,
         authorizer: Ruhusa,
-        execution_store: InMemoryExecutionStore | None = None,
+        execution_store: ExecutionStore | None = None,
     ) -> None:
         if authorizer.invocation_store is None:
-            raise ValueError(
+            raise ConfigurationError(
                 "ExecutionController requires Ruhusa to be configured with an invocation store"
             )
 
