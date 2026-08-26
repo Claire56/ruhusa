@@ -1,5 +1,13 @@
 from .audit import AuditEvent, InMemoryAuditLog
 from .core import Ruhusa
+from .errors import (
+    ConfigurationError,
+    InvalidStateTransitionError,
+    ProvenanceError,
+    RuhusaError,
+    StoreError,
+    StoreUnavailableError,
+)
 from .execution import (
     ExecutionClaimResult,
     ExecutionController,
@@ -11,6 +19,15 @@ from .execution import (
     InMemoryExecutionStore,
 )
 from .grants import InMemoryGrantStore
+from .interfaces import (
+    AuditLog,
+    ExecutionStore,
+    GrantStore,
+    InvocationStore,
+    PolicyStore,
+    RevocationStore,
+    ToolRegistry,
+)
 from .invocations import InMemoryInvocationStore, InvocationRecord, compute_arguments_digest
 from .models import (
     AuthorizationDecision,
@@ -27,8 +44,10 @@ from .tools import InMemoryToolRegistry, ToolRegistration
 
 __all__ = [
     "AuditEvent",
+    "AuditLog",
     "AuthorizationDecision",
     "AuthorizationRequest",
+    "ConfigurationError",
     "DecisionEffect",
     "DelegationGrant",
     "ExecutionClaimResult",
@@ -38,20 +57,31 @@ __all__ = [
     "ExecutionRecord",
     "ExecutionRecoveryOutcome",
     "ExecutionState",
+    "ExecutionStore",
+    "GrantStore",
     "InMemoryAuditLog",
     "InMemoryExecutionStore",
     "InMemoryGrantStore",
     "InMemoryInvocationStore",
     "InMemoryRevocationStore",
     "InMemoryToolRegistry",
+    "InvalidStateTransitionError",
     "InvocationRecord",
+    "InvocationStore",
     "PolicyRule",
+    "PolicyStore",
     "Principal",
+    "ProvenanceError",
     "RevocationRecord",
+    "RevocationStore",
     "Ruhusa",
+    "RuhusaError",
     "Scope",
     "StaticPolicyStore",
+    "StoreError",
+    "StoreUnavailableError",
     "TaskContext",
     "ToolRegistration",
+    "ToolRegistry",
     "compute_arguments_digest",
 ]
