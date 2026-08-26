@@ -95,9 +95,13 @@ class InMemoryRevocationStore:
         """Return the revocation record for a grant, if one exists."""
         return self._records.get(grant_id)
 
-    def all(self) -> tuple[RevocationRecord, ...]:
-        """Return all revocation records as an immutable snapshot."""
+    def snapshot(self) -> tuple[RevocationRecord, ...]:
+        """Return an immutable point-in-time view of revocations."""
         return tuple(self._records.values())
+
+    def all(self) -> tuple[RevocationRecord, ...]:
+        """Deprecated compatibility alias for snapshot()."""
+        return self.snapshot()
 
     def __len__(self) -> int:
         return len(self._records)
