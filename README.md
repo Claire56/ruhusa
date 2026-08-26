@@ -33,13 +33,12 @@ Ruhusa is not an agent framework, workflow engine, identity provider, LLM gatewa
 
 ## Project Status
 
-**Current package version:** `0.5.0`  
-**Latest released version:** `v0.5.0`  
-**Current research milestone:** `v0.6` — execution lifecycle and execution-time authority  
-**Milestone status:** active research development  
+**Current package version:** `0.6.0`
+**Current research milestone:** `v0.6` — execution lifecycle, execution-time authority, and recovery
+**Milestone status:** complete and validated
 **Release status:** pre-1.0 research framework
 
-The package version intentionally remains `0.5.0` while v0.6 is under active research development. The version will be bumped only when the v0.6 milestone is complete, validated, documented, and frozen.
+v0.6 closes the execution-lifecycle research milestone while retaining explicit boundaries around distributed execution, downstream idempotency, recovery-evidence provenance, and exactly-once external side effects.
 
 APIs and security guarantees may change before 1.0.
 
@@ -72,6 +71,10 @@ Ruhusa currently includes research implementations for:
 - fail-closed `UNKNOWN` state for uncertain external outcomes
 - execution-time authorization revalidation before protected side effects
 - terminal `CANCELLED` state when live authority becomes invalid before execution
+- stale-claim quarantine from `CLAIMED` to fail-closed `UNKNOWN`
+- explicit `UNKNOWN` reconciliation to `COMPLETED` or `AVAILABLE` through trusted recovery infrastructure
+- process-local single-winner reconciliation semantics
+- stale-permit protection across recovered execution attempts
 - adversarial attack benchmarks
 
 Not every configuration provides the same security guarantees. Self-asserted identity fields in weak mode remain intentionally benchmarked as forgeable.
@@ -234,7 +237,7 @@ See `docs/architecture.md` for the detailed architecture.
 
 ## v0.6 Experimental State
 
-The current benchmark contains **35 implemented experiments** across delegation, provenance, tool identity, execution lifecycle, and execution-time authority.
+The current benchmark contains **44 implemented experiments** across delegation, provenance, tool identity, execution lifecycle, execution-time authority, and recovery.
 
 ### v0.6-A — Execution Lifecycle
 
@@ -284,6 +287,30 @@ The research distinction is:
 
 > **Authorization-time validity is not execution-time validity, and execution-time revalidation is not atomic authorization plus side effect.**
 
+### v0.6-C — Fail-Closed Recovery for Uncertain Execution
+
+Experiments 36–44 evaluate stale execution claims and explicit recovery from `UNKNOWN`.
+
+Observed results:
+
+```text
+Exp 36  stale CLAIMED execution becomes UNKNOWN             BLOCKS unsafe retry
+Exp 37  live claim cannot be recovered before threshold     BLOCKS claim stealing
+Exp 38  confirmed side effect resolves UNKNOWN              COMPLETED / replay blocked
+Exp 39  confirmed no side effect permits a fresh claim      CONTROL
+Exp 40  reconciliation outside UNKNOWN                      BLOCKS
+Exp 41  concurrent reconciliation                           BLOCKS / one winner
+Exp 42  old permit after recovery                           BLOCKS
+Exp 43  invalid stale-recovery window                       BLOCKS invalid configuration
+Exp 44  empty reconciliation reason                         BLOCKS malformed recovery
+```
+
+v0.6-C establishes a fail-closed recovery lifecycle, but it does **not** authenticate the source of a reconciliation outcome. `reconcile_unknown()` is therefore a trusted-infrastructure API: an agent must not be allowed to self-assert `SIDE_EFFECT_CONFIRMED` or `SIDE_EFFECT_NOT_APPLIED`.
+
+The research distinction is:
+
+> **Execution-attempt uniqueness does not imply side-effect uniqueness, and safe recovery requires trustworthy knowledge of the external outcome.**
+
 ## Validation Baselines
 
 Frozen v0.5.0 release baseline:
@@ -296,17 +323,27 @@ build:       dist/ruhusa-0.5.0.tar.gz
 build:       dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
-Current v0.6 development baseline after v0.6-A and v0.6-B:
+Validated v0.6-C development baseline before the release-version bump:
 
 ```text
-ruff format: 32 files left unchanged
 ruff check:  All checks passed
-pytest:      109 passed
+pytest:      118 passed
 build:       dist/ruhusa-0.5.0.tar.gz
 build:       dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
-The `0.5.0` build artifact name is expected during active v0.6 development because the package version has not yet been bumped.
+The final v0.6.0 release validation is recorded below.
+
+## v0.6.0 Release Validation
+
+```text
+ruff check:  All checks passed
+pytest:      118 passed
+build:       dist/ruhusa-0.6.0.tar.gz
+build:       dist/ruhusa-0.6.0-py3-none-any.whl
+```
+
+The v0.6 threat model is frozen at `docs/threat-model/v0.6.md`.
 
 ## Documentation
 
@@ -317,8 +354,10 @@ The repository separates architecture, security assumptions, and experimental ev
 - [`docs/attack-benchmarks.md`](docs/attack-benchmarks.md) — executable adversarial experiments and outcomes
 - [`docs/threat-model/v0.4.md`](docs/threat-model/v0.4.md) — frozen v0.4 threat-model snapshot
 - [`docs/threat-model/v0.5.md`](docs/threat-model/v0.5.md) — frozen v0.5 threat-model snapshot
+- [`docs/threat-model/v0.6.md`](docs/threat-model/v0.6.md) — frozen v0.6 threat-model snapshot
 - [`docs/research/v0.6-A-execution-lifecycle.md`](docs/research/v0.6-A-execution-lifecycle.md) — execution-lifecycle research note
 - [`docs/research/v0.6-B-execution-time-authority.md`](docs/research/v0.6-B-execution-time-authority.md) — execution-time authority research note
+- [`docs/research/v0.6-C-idempotency-recovery.md`](docs/research/v0.6-C-idempotency-recovery.md) — uncertain-execution recovery research note
 - [`docs/architecture/v0.1.md`](docs/architecture/v0.1.md) — historical v0.1 architecture
 
 ## Requirements
@@ -349,6 +388,7 @@ uv run pytest tests/test_replanning_attacks.py -v
 uv run pytest tests/test_tool_identity_attacks.py -v
 uv run pytest tests/test_execution_lifecycle_attacks.py -v
 uv run pytest tests/test_execution_time_authority_attacks.py -v
+uv run pytest tests/test_idempotency_recovery.py -v
 ```
 
 Format and lint:
@@ -430,13 +470,15 @@ Added trusted invocation provenance, tool/implementation identity, operation bin
 
 The v0.5 milestone intentionally retains one documented limitation: exact same-operation invocation replay is not prevented by one-shot authorization consumption.
 
-### v0.6 — Execution Lifecycle and Execution-Time Authority
+### v0.6 — Execution Lifecycle, Execution-Time Authority, and Recovery
 
 v0.6-A adds execution claims, replay controls, completion/unknown/cancelled lifecycle state, and process-local concurrency protection.
 
 v0.6-B adds execution-time revalidation so revocation, task expiry, and policy changes that occur after a claim can be observed immediately before use.
 
-The current residual boundary is deliberate: revalidation narrows the TOCTOU window but is not atomic with a remote side effect. Downstream idempotency, distributed atomicity, durable reconciliation, and exactly-once effects remain research targets.
+v0.6-C adds fail-closed stale-claim recovery and explicit reconciliation of `UNKNOWN` outcomes. A confirmed external effect becomes `COMPLETED`; confirmed non-execution may return the invocation to `AVAILABLE` for a newly authorized claim.
+
+The remaining boundary is deliberate: Ruhusa does not make authorization, recovery state, and a remote side effect transactionally atomic. It also does not authenticate reconciliation evidence, provide durable distributed recovery, or guarantee downstream idempotency or exactly-once execution.
 
 ## Research Direction
 
@@ -457,9 +499,10 @@ execution-time revalidation != atomic authorization + side effect
 Current and future research areas include:
 
 - authorization/execution atomicity
-- idempotency and one-shot authority
+- downstream idempotency and side-effect deduplication
 - distributed concurrency and durable execution state
-- reconciliation of uncertain outcomes
+- authenticated/provenanced recovery evidence
+- durable reconciliation of uncertain outcomes
 - authority leases / epochs and TOCTOU
 - authorization propagation across branch/merge workflows
 - multi-agent collusion
