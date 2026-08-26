@@ -582,7 +582,7 @@ AVAILABLE --claim--> CLAIMED --complete--> COMPLETED
 Interpretation:
 
 - `COMPLETED` blocks replay of a known completed execution;
-- `UNKNOWN` blocks automatic retry when the external outcome cannot be determined;
+- `UNKNOWN` blocks blind automatic retry when the external outcome cannot be determined; v0.6-C permits only explicit reconciliation from trusted infrastructure;
 - `CANCELLED` terminates an invocation whose authority became invalid before use;
 - safe release to `AVAILABLE` is permitted only when the protected side effect is known not to have started.
 
@@ -595,7 +595,9 @@ The current benchmark does not establish:
 - downstream idempotency;
 - durable execution-state recovery;
 - atomic authorization/revocation plus external side effect;
-- reconciliation of `UNKNOWN`;
+- authenticated or independently proven provenance of reconciliation outcomes;
+- durable cross-process reconciliation of `UNKNOWN`;
+- automatic recovery while the external outcome remains unknowable;
 - prevention of authority changes after the final revalidation instant.
 
 These are not hidden implementation omissions; they are explicit research boundaries.
@@ -866,7 +868,10 @@ dist/ruhusa-0.5.0-py3-none-any.whl
 Final v0.6.0 release validation:
 
 ```text
-ruff check:  All checks passed\npytest:      118 passed\nbuild:       dist/ruhusa-0.6.0.tar.gz\nbuild:       dist/ruhusa-0.6.0-py3-none-any.whl
+ruff check:  All checks passed
+pytest:      118 passed
+build:       dist/ruhusa-0.6.0.tar.gz
+build:       dist/ruhusa-0.6.0-py3-none-any.whl
 ```
 
 ---

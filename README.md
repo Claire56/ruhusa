@@ -35,7 +35,7 @@ Ruhusa is not an agent framework, workflow engine, identity provider, LLM gatewa
 
 **Current package version:** `0.6.0`
 **Current research milestone:** `v0.6` — execution lifecycle, execution-time authority, and recovery
-**Milestone status:** validated release candidate
+**Milestone status:** complete and validated
 **Release status:** pre-1.0 research framework
 
 v0.6 closes the execution-lifecycle research milestone while retaining explicit boundaries around distributed execution, downstream idempotency, recovery-evidence provenance, and exactly-once external side effects.
@@ -332,12 +332,15 @@ build:       dist/ruhusa-0.5.0.tar.gz
 build:       dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
-Final v0.6.0 release validation is recorded after this release preparation script completes successfully.
+The final v0.6.0 release validation is recorded below.
 
 ## v0.6.0 Release Validation
 
 ```text
-ruff check:  All checks passed\npytest:      118 passed\nbuild:       dist/ruhusa-0.6.0.tar.gz\nbuild:       dist/ruhusa-0.6.0-py3-none-any.whl
+ruff check:  All checks passed
+pytest:      118 passed
+build:       dist/ruhusa-0.6.0.tar.gz
+build:       dist/ruhusa-0.6.0-py3-none-any.whl
 ```
 
 The v0.6 threat model is frozen at `docs/threat-model/v0.6.md`.

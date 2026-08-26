@@ -10,13 +10,15 @@
 
 This document describes Ruhusa's current trust model, attacker capabilities, security invariants, tested threats, implemented controls, confirmed gaps, and known limitations.
 
-The v0.5.0 release has already been frozen at:
+Historical release snapshots are frozen at:
 
 ```text
 docs/threat-model/v0.5.md
+docs/threat-model/v0.6.md
 ```
 
-That historical snapshot must remain unchanged. This living document now tracks validated v0.6 research controls and residual gaps.
+Those snapshots must remain unchanged. This living document currently reflects
+the validated v0.6.0 security boundary and may evolve only for later milestones.
 
 Ruhusa's central principles are:
 
@@ -683,7 +685,7 @@ It should not be described as tamper-proof.
 
 ## 14. Known Limitations
 
-The current v0.6 development line does not provide:
+Ruhusa v0.6.0 does not provide:
 
 - production-grade persistent authorization or execution stores
 - cryptographic principal identity
@@ -813,7 +815,10 @@ dist/ruhusa-0.5.0-py3-none-any.whl
 Final v0.6.0 release validation:
 
 ```text
-ruff check:  All checks passed\npytest:      118 passed\nbuild:       dist/ruhusa-0.6.0.tar.gz\nbuild:       dist/ruhusa-0.6.0-py3-none-any.whl
+ruff check:  All checks passed
+pytest:      118 passed
+build:       dist/ruhusa-0.6.0.tar.gz
+build:       dist/ruhusa-0.6.0-py3-none-any.whl
 ```
 
 Current v0.6 experiment status:
@@ -831,21 +836,15 @@ Exp 35 -> GAP / residual post-revalidation TOCTOU
 Exp 36-38 -> BLOCKS / completed recovery
 Exp 39 -> CONTROL / confirmed-not-applied recovery
 Exp 40-44 -> BLOCKS
-Exp 36-38 -> BLOCKS / completed recovery
-Exp 39 -> CONTROL / confirmed-not-applied recovery
-Exp 40-44 -> BLOCKS
-Exp 36-38 -> BLOCKS / completed recovery
-Exp 39 -> CONTROL / confirmed-not-applied recovery
-Exp 40-44 -> BLOCKS
 ```
 
 ---
 
-## 18. v0.6 Development Boundary
+## 18. v0.6.0 Release Boundary
 
 The frozen v0.5.0 security contract remains unchanged in `docs/threat-model/v0.5.md`.
 
-The living v0.6 line now experimentally supports:
+The v0.6.0 release experimentally supports:
 
 - process-local single active execution claims;
 - replay blocking after completion;
@@ -854,7 +853,7 @@ The living v0.6 line now experimentally supports:
 - execution-time revalidation of live authority;
 - terminal cancellation when authority becomes invalid before use.
 
-The v0.6 line intentionally retains:
+The v0.6.0 security contract intentionally retains:
 - the non-consuming `authorize()` baseline;
 - no distributed exactly-once guarantee;
 - no atomic authorization/revocation + remote side effect;

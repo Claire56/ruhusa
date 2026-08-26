@@ -1,9 +1,9 @@
 # Ruhusa Architecture
 
 **Architecture status:** Living document  
-**Current framework milestone:** v0.6 — active execution-lifecycle research  
+**Current framework milestone:** v0.6 — validated execution-lifecycle, execution-time authority, and recovery milestone  
 **Current package version:** 0.6.0  
-**Release status:** Pre-1.0 research framework; latest frozen release is v0.5.0
+**Release status:** Pre-1.0 research framework; v0.6.0 validated for release with a frozen security snapshot at `docs/threat-model/v0.6.md`
 
 ---
 
