@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from threading import Lock
 from uuid import uuid4
@@ -25,6 +25,23 @@ class ExecutionState(str, Enum):
     COMPLETED = "completed"
     UNKNOWN = "unknown"
     CANCELLED = "cancelled"
+
+
+class ExecutionRecoveryOutcome(str, Enum):
+    """Trusted result of reconciling an UNKNOWN execution.
+
+    SIDE_EFFECT_CONFIRMED
+        An external system confirms that the protected side effect occurred.
+        The invocation becomes permanently COMPLETED.
+
+    SIDE_EFFECT_NOT_APPLIED
+        An external system confirms that the protected side effect did not
+        occur. Execution authority may become AVAILABLE again, subject to a
+        fresh authorization check before another claim.
+    """
+
+    SIDE_EFFECT_CONFIRMED = "side_effect_confirmed"
+    SIDE_EFFECT_NOT_APPLIED = "side_effect_not_applied"
 
 
 @dataclass(frozen=True)
@@ -62,8 +79,8 @@ class ExecutionRecord:
 
     UNKNOWN
         The executor cannot determine whether the side effect occurred.
-        Automatic retry fails closed until a future reconciliation mechanism
-        explicitly resolves the state.
+        Automatic retry fails closed until trusted reconciliation explicitly
+        resolves the state.
 
     CANCELLED
         Execution-time authorization became invalid before the side effect.
@@ -82,6 +99,10 @@ class ExecutionRecord:
     unknown_at: datetime | None = None
     cancelled_at: datetime | None = None
     cancel_reason: str | None = None
+    recovered_at: datetime | None = None
+    recovery_outcome: ExecutionRecoveryOutcome | None = None
+    recovery_reason: str | None = None
+    recovery_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -105,9 +126,9 @@ class ExecutionDecision:
 class InMemoryExecutionStore:
     """Thread-safe research implementation of invocation execution state.
 
-    The store provides process-local atomic claim semantics. Concurrent
-    threads racing for the same invocation can produce at most one winning
-    permit.
+    The store provides process-local atomic claim and recovery semantics.
+    Concurrent threads racing for the same invocation can produce at most one
+    winning permit or one successful recovery transition.
 
     It intentionally does *not* claim distributed consensus, cross-process
     atomicity, durable crash recovery, atomic authorization with an external
@@ -166,6 +187,7 @@ class InMemoryExecutionStore:
 
             claim_id = uuid4().hex
             attempt = record.attempt_count + 1
+
             updated = replace(
                 record,
                 state=ExecutionState.CLAIMED,
@@ -266,6 +288,111 @@ class InMemoryExecutionStore:
             )
             return True
 
+    def mark_stale_claim_unknown(
+        self,
+        invocation_id: str,
+        *,
+        stale_after: timedelta,
+        now: datetime | None = None,
+    ) -> bool:
+        """Quarantine an abandoned/stale CLAIMED execution as UNKNOWN.
+
+        A stale claim is never automatically made retryable because merely
+        losing contact with a worker does not prove that the external side
+        effect did not occur.
+
+        Moving the claim to UNKNOWN therefore fails closed. A trusted
+        reconciliation step must later establish whether the side effect
+        occurred.
+
+        This in-memory backend models process-local recovery only. Production
+        backends should use durable leases or fencing for claim ownership.
+        """
+        if stale_after <= timedelta(0):
+            raise ValueError("stale_after must be greater than zero")
+
+        now = _as_utc(now or datetime.now(UTC))
+
+        with self._lock:
+            record = self._records.get(invocation_id)
+
+            if (
+                record is None
+                or record.state is not ExecutionState.CLAIMED
+                or record.claimed_at is None
+            ):
+                return False
+
+            stale_at = _as_utc(record.claimed_at) + stale_after
+            if now < stale_at:
+                return False
+
+            self._records[invocation_id] = replace(
+                record,
+                state=ExecutionState.UNKNOWN,
+                unknown_at=now,
+            )
+            return True
+
+    def reconcile_unknown(
+        self,
+        invocation_id: str,
+        *,
+        outcome: ExecutionRecoveryOutcome,
+        reason: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Resolve UNKNOWN only from trusted external reconciliation.
+
+        ``SIDE_EFFECT_CONFIRMED`` permanently consumes execution authority.
+
+        ``SIDE_EFFECT_NOT_APPLIED`` makes the invocation AVAILABLE again. A
+        subsequent attempt must still pass Ruhusa authorization and obtain a
+        fresh execution claim.
+
+        This method belongs to trusted reconciliation infrastructure. Agents
+        must not be allowed to self-assert recovery outcomes.
+        """
+        reason = reason.strip()
+        if not reason:
+            raise ValueError("recovery reason must not be empty")
+
+        now = _as_utc(now or datetime.now(UTC))
+
+        with self._lock:
+            record = self._records.get(invocation_id)
+
+            if record is None or record.state is not ExecutionState.UNKNOWN:
+                return False
+
+            recovery_fields = {
+                "recovered_at": now,
+                "recovery_outcome": outcome,
+                "recovery_reason": reason,
+                "recovery_count": record.recovery_count + 1,
+            }
+
+            if outcome is ExecutionRecoveryOutcome.SIDE_EFFECT_CONFIRMED:
+                updated = replace(
+                    record,
+                    state=ExecutionState.COMPLETED,
+                    completed_at=now,
+                    **recovery_fields,
+                )
+            elif outcome is ExecutionRecoveryOutcome.SIDE_EFFECT_NOT_APPLIED:
+                updated = replace(
+                    record,
+                    state=ExecutionState.AVAILABLE,
+                    claim_id=None,
+                    released_at=now,
+                    **recovery_fields,
+                )
+            else:
+                raise ValueError(f"unsupported recovery outcome: {outcome}")
+
+            self._records[invocation_id] = updated
+            return True
+
     def cancel(
         self,
         permit: ExecutionPermit,
@@ -323,7 +450,9 @@ class ExecutionController:
        side effect;
     3. execute only when revalidation returns ``allowed=True``;
     4. call ``complete`` after a known successful side effect, or
-       ``mark_unknown`` if the external outcome cannot be determined.
+       ``mark_unknown`` if the external outcome cannot be determined;
+    5. use trusted recovery to quarantine stale claims and reconcile UNKNOWN
+       outcomes before considering another attempt.
 
     This separates:
 
@@ -331,8 +460,11 @@ class ExecutionController:
         ExecutionStore  -> has that operation's execution authority been used?
 
     v0.6-B reduces the authorization-to-use time-of-check/time-of-use window by
-    re-evaluating live authority at the execution boundary. It does not make
-    that revalidation atomic with an external system's side effect.
+    re-evaluating live authority at the execution boundary.
+
+    v0.6-C adds fail-closed recovery for abandoned claims and uncertain external
+    outcomes. It still does not make lifecycle state atomic with an external
+    system's side effect.
     """
 
     def __init__(
@@ -506,3 +638,31 @@ class ExecutionController:
         now: datetime | None = None,
     ) -> bool:
         return self.execution_store.mark_unknown(permit, now=now)
+
+    def mark_stale_claim_unknown(
+        self,
+        invocation_id: str,
+        *,
+        stale_after: timedelta,
+        now: datetime | None = None,
+    ) -> bool:
+        return self.execution_store.mark_stale_claim_unknown(
+            invocation_id,
+            stale_after=stale_after,
+            now=now,
+        )
+
+    def reconcile_unknown(
+        self,
+        invocation_id: str,
+        *,
+        outcome: ExecutionRecoveryOutcome,
+        reason: str,
+        now: datetime | None = None,
+    ) -> bool:
+        return self.execution_store.reconcile_unknown(
+            invocation_id,
+            outcome=outcome,
+            reason=reason,
+            now=now,
+        )

@@ -6,6 +6,7 @@ from .execution import (
     ExecutionDecision,
     ExecutionPermit,
     ExecutionRecord,
+    ExecutionRecoveryOutcome,
     ExecutionState,
     InMemoryExecutionStore,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "ExecutionDecision",
     "ExecutionPermit",
     "ExecutionRecord",
+    "ExecutionRecoveryOutcome",
     "ExecutionState",
     "InMemoryAuditLog",
     "InMemoryExecutionStore",
