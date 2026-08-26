@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
-import ruhusa
 
+import ruhusa
 from ruhusa import (
     AuditLog,
     ConfigurationError,
@@ -25,7 +25,6 @@ from ruhusa import (
     StoreUnavailableError,
     ToolRegistry,
 )
-
 
 EXPECTED_PUBLIC_API = {
     "AuditEvent",
