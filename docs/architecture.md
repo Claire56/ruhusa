@@ -2,7 +2,7 @@
 
 **Architecture status:** Living document  
 **Current framework milestone:** v0.6 — active execution-lifecycle research  
-**Current package version:** 0.5.0  
+**Current package version:** 0.6.0  
 **Release status:** Pre-1.0 research framework; latest frozen release is v0.5.0
 
 ---
@@ -802,6 +802,9 @@ It is not independently signed or externally anchored.
 
 ## 22. Authorization vs Execution
 
+Ruhusa v0.6 separates immutable invocation provenance from mutable execution
+lifecycle state.
+
 ```text
 AUTHORIZATION PLANE
 --------------------------------
@@ -818,44 +821,54 @@ AuditLog
 Ruhusa.authorize()
 
 
-EXECUTION LIFECYCLE
+EXECUTION PLANE
 --------------------------------
-ExecutionController.begin()
+ExecutionController
         |
-        v
-ExecutionStore.claim()
+        +--> begin()
+        |      authorize + claim
         |
-        v
-CLAIMED
+        +--> revalidate_before_execution()
+        |      live authority check
         |
-        v
-revalidate_before_execution()
+        +--> complete()
         |
-   +----+----+
-   |         |
- ALLOW      DENY
-   |         |
-   v         v
-tool/API  CANCELLED
-   |
-   +--> COMPLETED
-   +--> UNKNOWN
+        +--> mark_unknown()
+        |
+        +--> mark_stale_claim_unknown()
+        |
+        +--> reconcile_unknown()
 ```
 
-v0.6-A addresses one-shot execution claiming within the process-local research store.
+The execution lifecycle is:
 
-v0.6-B re-checks live authorization immediately before use.
+```text
+AVAILABLE --claim--> CLAIMED --complete--> COMPLETED
+    ^                   |
+    |                   +--uncertain/stale--> UNKNOWN
+    |                                       /       \
+    |                        confirmed no effect    confirmed effect
+    |                                  |               |
+    +----------------------------------+               v
+                                                  COMPLETED
 
-Ruhusa still does not guarantee:
+CLAIMED --live authority invalid--> CANCELLED
+```
 
-- exactly-once external tool execution
-- distributed claim atomicity across processes or pods
-- downstream idempotency
-- durable execution-state recovery
-- reconciliation of `UNKNOWN`
-- atomic commit of authorization/revocation state and a remote side effect
+v0.6 establishes process-local lifecycle controls. It does not establish
+transactional atomicity with an external system.
 
-Experiment 35 demonstrates the residual post-revalidation TOCTOU boundary.
+A critical recovery trust boundary remains:
+
+```text
+self-asserted recovery outcome
+    !=
+trusted execution evidence
+```
+
+`reconcile_unknown()` is intended for trusted reconciliation infrastructure.
+Ruhusa v0.6 does not authenticate that infrastructure or independently prove
+the outcome it supplies.
 
 ---
 
@@ -882,48 +895,39 @@ Experiment 15 was originally possible because a security path was skipped, not b
 
 ---
 
-## 24. Current Experiment Status
+## 24. v0.6 Experiment Status
 
-The current benchmark contains **35 implemented experiments**.
-
-Key v0.5 boundary:
+The current benchmark contains **44 implemented experiments**.
 
 ```text
-Experiment 16
-Exact invocation replay through authorize()
-v0.5.0: GAP
-v0.6: preserved baseline
+v0.5
+Exp 15  direct/non-delegated mediation bypass       BLOCKS after mitigation
+Exp 16  exact authorize() replay                     GAP / preserved baseline
+Exp 17  missing canonical tool identity              BLOCKS
+
+v0.6-A
+Exp 18                                               GAP / preserved baseline
+Exp 19-21                                           BLOCKS
+Exp 22                                              CONTROL
+Exp 23-25                                           BLOCKS
+Exp 26                                              CONTROL
+Exp 27                                              BLOCKS
+
+v0.6-B
+Exp 28                                              BLOCKS
+Exp 29                                              GAP / temporal baseline
+Exp 30-34                                           BLOCKS
+Exp 35                                              GAP / residual TOCTOU
+
+v0.6-C
+Exp 36-38                                           BLOCKS / completed recovery
+Exp 39                                              CONTROL
+Exp 40-44                                           BLOCKS
 ```
 
-v0.6-A:
-
-```text
-Exp 18  exact replay baseline                 GAP
-Exp 19  duplicate execution claim             BLOCKS
-Exp 20  concurrent process-local claim race   BLOCKS
-Exp 21  replay after completion               BLOCKS
-Exp 22  safe pre-execution retry              CONTROL
-Exp 23  uncertain-outcome retry               BLOCKS
-Exp 24  stale/forged permit                   BLOCKS
-Exp 25  expired execution authority           BLOCKS
-Exp 26  DENY does not consume lifecycle       CONTROL
-Exp 27  execution-store failure               BLOCKS
-```
-
-v0.6-B:
-
-```text
-Exp 28  revocation before claim               BLOCKS
-Exp 29  revocation after claim, no recheck     GAP
-Exp 30  revocation after claim, revalidated    BLOCKS
-Exp 31  task expiry after claim                BLOCKS
-Exp 32  policy change after claim              BLOCKS
-Exp 33  stale/forged permit at revalidation    BLOCKS
-Exp 34  lifecycle failure at revalidation      BLOCKS
-Exp 35  revocation after final revalidation    GAP
-```
-
-The full development validation after v0.6-A and v0.6-B is **109 passing tests**.
+The v0.6-C tests establish fail-closed stale-claim handling and process-local
+UNKNOWN reconciliation. They do not establish authenticated provenance for a
+reconciliation outcome.
 
 ---
 
@@ -965,35 +969,40 @@ The full development validation after v0.6-A and v0.6-B is **109 passing tests**
 
 **INV-18 — Trusted tool execution identity.** When tool verification is required, canonical runtime tool identity must be present, registered, and authorized for the action.
 
-**EXE-01 — Single active process-local execution claim.** A canonical invocation may have at most one active execution attempt in `InMemoryExecutionStore`.
+**EXE-01 — Single active execution claim.** Within the configured execution store, one invocation may have at most one active claimed attempt.
 
-**EXE-02 — Live authority at the execution boundary.** A claimed invocation must still satisfy the complete deterministic authorization path immediately before a protected side effect is attempted.
+**EXE-02 — Live authority at execution boundary.** Side-effecting integrations can re-run the complete authorization path immediately before use.
 
-There is intentionally **no invariant claiming atomic authorization plus remote side effect or exactly-once external execution**.
+**EXE-03 — Uncertain outcomes fail closed.** An uncertain or stale execution is quarantined in `UNKNOWN`, not silently made retryable.
+
+**EXE-04 — Recovery transitions are state-bound.** Reconciliation is accepted only from `UNKNOWN`; terminal `COMPLETED` and `CANCELLED` state is not resurrected by that path.
+
+There is intentionally **no v0.6 invariant claiming distributed exactly-once execution, authenticated recovery-evidence provenance, or transactional authorization plus side effect**.
 
 ---
 
 ## 26. Known Limitations
 
-The current v0.6 development line does not provide:
+v0.6.0 does not provide:
 
-- production-grade durable security stores
-- cryptographic agent identity
-- cryptographic tool attestation
-- automatic descendant revocation
-- distributed execution-claim consensus across processes or pods
-- durable execution-state recovery
-- exactly-once external execution
-- downstream idempotency guarantees
-- atomic authorization/revocation state + external side effect
-- automatic reconciliation of `UNKNOWN` outcomes
-- prevention of authority changes after the final revalidation instant
-- complete information-flow authorization
-- durable approval workflows
-- protection from trusted-orchestrator compromise
-- independently anchored audit records
+- production-grade durable security stores;
+- cryptographic agent identity;
+- cryptographic tool attestation;
+- automatic descendant revocation;
+- distributed execution-claim consensus;
+- durable execution-state recovery;
+- authenticated/provenanced reconciliation evidence;
+- exactly-once external execution;
+- downstream idempotency;
+- atomic authorization/revocation + external side effect;
+- automatic recovery when the external outcome remains unknowable;
+- prevention of authority change after the final revalidation instant;
+- complete information-flow authorization;
+- durable approval workflows;
+- protection from trusted-orchestrator compromise;
+- independently anchored audit records.
 
-The v0.6 execution lifecycle does provide process-local one-active-claim semantics, but this must not be generalized into a distributed exactly-once guarantee.
+The current execution and recovery stores demonstrate process-local semantics.
 
 ---
 
@@ -1037,6 +1046,14 @@ execution-time authority revalidation
 CANCELLED terminal state
 post-claim revocation / task expiry / policy change checks
 documented residual post-revalidation TOCTOU gap
+
+v0.6
+execution lifecycle and process-local atomic claims
+execution-time authority revalidation
+fail-closed UNKNOWN and CANCELLED states
+stale-claim quarantine
+explicit UNKNOWN reconciliation
+documented recovery-evidence trust boundary
 ```
 
 ---

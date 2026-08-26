@@ -1,8 +1,8 @@
 # Ruhusa Attack Benchmarks
 
 **Status:** Living research artifact  
-**Current milestone:** v0.6 — execution lifecycle and execution-time authority  
-**Current implemented experiment count:** 35
+**Current milestone:** v0.6 — execution lifecycle, execution-time authority, and recovery  
+**Current implemented experiment count:** 44
 
 Primary benchmark files:
 
@@ -11,6 +11,7 @@ tests/test_replanning_attacks.py
 tests/test_tool_identity_attacks.py
 tests/test_execution_lifecycle_attacks.py
 tests/test_execution_time_authority_attacks.py
+tests/test_idempotency_recovery.py
 ```
 
 ---
@@ -459,7 +460,7 @@ BLOCKS — DENY
 
 > When an operation is correctly authorized, under what execution-lifecycle and timing transformations can that authority be replayed, concurrently reused, become stale, or diverge from the authority that remains valid at the instant of use?
 
-v0.6 is intentionally split into two attack families:
+v0.6 is intentionally split into three attack families:
 
 ```text
 v0.6-A
@@ -467,6 +468,9 @@ execution uniqueness and lifecycle state
 
 v0.6-B
 execution-time authority validity and TOCTOU
+
+v0.6-C
+fail-closed stale-claim and UNKNOWN recovery
 ```
 
 Primary files:
@@ -474,6 +478,7 @@ Primary files:
 ```text
 tests/test_execution_lifecycle_attacks.py
 tests/test_execution_time_authority_attacks.py
+tests/test_idempotency_recovery.py
 ```
 
 ## 24. v0.6-A — Execution Lifecycle Matrix
@@ -597,6 +602,53 @@ These are not hidden implementation omissions; they are explicit research bounda
 
 ---
 
+## 27A. v0.6-C — Recovery Matrix
+
+Primary file:
+
+```text
+tests/test_idempotency_recovery.py
+```
+
+| Exp | Scenario | Observed Result | Primary Control / Meaning |
+|---:|---|---|---|
+| 36 | Stale `CLAIMED` execution | `BLOCKS unsafe retry` | stale claim becomes `UNKNOWN`, not `AVAILABLE` |
+| 37 | Recovery before stale threshold | `BLOCKS` | live claim cannot be stolen |
+| 38 | Reconciliation confirms side effect occurred | `COMPLETED` / replay blocked | confirmed effect permanently consumes execution |
+| 39 | Reconciliation confirms no side effect occurred | `CONTROL — fresh claim allowed` | explicit recovery to `AVAILABLE` |
+| 40 | Reconciliation from non-`UNKNOWN` state | `BLOCKS` | recovery transition restricted to `UNKNOWN` |
+| 41 | Concurrent reconciliation race | `BLOCKS duplicate transition` | one process-local winner |
+| 42 | Old permit after recovery and fresh claim | `BLOCKS` | claim ID + attempt binding |
+| 43 | Non-positive stale threshold | `BLOCKS invalid configuration` | recovery window validation |
+| 44 | Empty recovery reason | `BLOCKS malformed recovery` | explicit recovery rationale required |
+
+### v0.6-C Finding
+
+A lost worker or timeout is not evidence that a side effect did not occur.
+
+```text
+stale CLAIMED
+    |
+    v
+UNKNOWN
+    |
+    +-- trusted confirmation: effect occurred ----> COMPLETED
+    |
+    +-- trusted confirmation: no effect ----------> AVAILABLE
+```
+
+This establishes:
+
+> **Execution-attempt uniqueness does not imply side-effect uniqueness.**
+
+It also exposes a remaining trust boundary:
+
+> **A self-asserted recovery outcome is not trusted execution evidence.**
+
+The v0.6-C implementation assumes `reconcile_unknown()` is called only by
+trusted reconciliation infrastructure. It does not authenticate that caller or
+verify recovery evidence provenance itself.
+
 # Part IV — Cross-Version Findings
 
 ## 28. Provenance Progression
@@ -661,6 +713,18 @@ execution-time revalidation
 atomic authorization + side effect
 ```
 
+v0.6-C adds:
+
+```text
+execution-attempt uniqueness
+!=
+side-effect uniqueness
+
+self-asserted recovery outcome
+!=
+trusted execution evidence
+```
+
 ---
 
 ## 29. Current Coverage
@@ -697,6 +761,13 @@ The benchmark now covers:
 - post-claim policy change
 - execution-time revalidation
 - residual post-revalidation TOCTOU
+- stale execution-claim recovery
+- early stale-claim recovery attempts
+- UNKNOWN-to-COMPLETED reconciliation
+- UNKNOWN-to-AVAILABLE reconciliation
+- concurrent reconciliation races
+- stale permits after recovery
+- malformed recovery parameters
 
 Coverage of a threat category does not imply exhaustive coverage of every possible variant.
 
@@ -710,7 +781,8 @@ Future benchmark areas include:
 - downstream idempotency and duplicate-side-effect suppression
 - distributed execution-claim consistency
 - durable execution-state recovery
-- reconciliation of `UNKNOWN` outcomes
+- authenticated/provenanced reconciliation evidence
+- durable reconciliation of `UNKNOWN` outcomes
 - authority leases / epochs
 - multi-agent collusion
 - descendant revocation
@@ -769,6 +841,7 @@ Run the v0.6 execution-lifecycle benchmarks:
 ```bash
 uv run pytest tests/test_execution_lifecycle_attacks.py -v
 uv run pytest tests/test_execution_time_authority_attacks.py -v
+uv run pytest tests/test_idempotency_recovery.py -v
 ```
 
 Frozen v0.5.0 release baseline:
@@ -781,17 +854,20 @@ dist/ruhusa-0.5.0.tar.gz
 dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
-Current v0.6 development validation after v0.6-A and v0.6-B:
+Validated v0.6-C development baseline before release-version bump:
 
 ```text
-32 files left unchanged
 All checks passed!
-109 passed in 0.13s
+118 passed
 dist/ruhusa-0.5.0.tar.gz
 dist/ruhusa-0.5.0-py3-none-any.whl
 ```
 
-The package version remains `0.5.0` while v0.6 is under active development.
+Final v0.6.0 release validation:
+
+```text
+ruff check:  All checks passed\npytest:      118 passed\nbuild:       dist/ruhusa-0.6.0.tar.gz\nbuild:       dist/ruhusa-0.6.0-py3-none-any.whl
+```
 
 ---
 
