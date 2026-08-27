@@ -5,16 +5,16 @@ the stable persistence protocols defined in v0.7-A.
 
 ## Scope
 
-The first PostgreSQL persistence slice includes:
+The PostgreSQL persistence layer currently includes:
 
 - `PostgresGrantStore`
 - `PostgresRevocationStore`
 - `PostgresInvocationStore`
 - `PostgresToolRegistry`
+- `PostgresExecutionStore`
 
-Execution lifecycle persistence and durable audit logging are implemented
-in later v0.7-B slices because they require additional transaction and
-concurrency guarantees.
+Durable audit logging is implemented separately because concurrent
+audit-chain persistence requires additional serialization guarantees.
 
 ## Installation
 
@@ -30,6 +30,7 @@ The base Ruhusa package does not require PostgreSQL dependencies.
 
 ```python
 from ruhusa.postgres import (
+    PostgresExecutionStore,
     PostgresGrantStore,
     PostgresInvocationStore,
     PostgresRevocationStore,
@@ -46,6 +47,7 @@ grant_store = PostgresGrantStore(pool)
 revocation_store = PostgresRevocationStore(pool)
 invocation_store = PostgresInvocationStore(pool)
 tool_registry = PostgresToolRegistry(pool)
+execution_store = PostgresExecutionStore(pool)
 ```
 
 Schema initialization is explicit. Constructing a store does not
@@ -78,6 +80,33 @@ If multiple revocations are submitted for the same grant, PostgreSQL
 atomically preserves the earliest effective revocation timestamp.
 A later revocation can never delay an earlier revocation.
 
+### Distributed execution fencing
+
+`PostgresExecutionStore` makes lifecycle transitions atomic for one
+canonical invocation across workers and processes.
+
+A successful claim receives an `ExecutionPermit` containing:
+
+- `invocation_id`
+- `claim_id`
+- `attempt`
+
+All permit-owned state transitions require the current `claim_id` and
+`attempt`. A permit from an older attempt therefore cannot complete,
+cancel, release, or otherwise mutate a newer execution attempt.
+
+Concurrent claims for the same invocation produce at most one winning
+permit.
+
+A stale claim is moved to `UNKNOWN`, not automatically back to
+`AVAILABLE`, because worker disappearance does not prove that the
+external side effect did not occur.
+
+Only trusted reconciliation may resolve `UNKNOWN`:
+
+- confirmed side effect → `COMPLETED`
+- confirmed no side effect → `AVAILABLE`
+
 ### Backend failures
 
 PostgreSQL errors are not translated into `None`, `False`, or
@@ -97,7 +126,6 @@ the PostgreSQL stores.
 
 The following are intentionally deferred:
 
-- PostgreSQL execution lifecycle store
 - PostgreSQL audit log
 - Redis
 - FastAPI

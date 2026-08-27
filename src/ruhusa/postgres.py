@@ -1,12 +1,20 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from .execution import (
+    ExecutionClaimResult,
+    ExecutionPermit,
+    ExecutionRecord,
+    ExecutionRecoveryOutcome,
+    ExecutionState,
+)
 from .invocations import InvocationRecord
 from .models import DelegationGrant, Scope
 from .revocation import RevocationRecord
@@ -69,6 +77,44 @@ _SCHEMA_STATEMENTS = (
         PRIMARY KEY (tool_id, implementation_id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_executions (
+        invocation_id TEXT PRIMARY KEY,
+        expires_at TIMESTAMPTZ NOT NULL,
+        state TEXT NOT NULL DEFAULT 'available'
+            CHECK (
+                state IN (
+                    'available',
+                    'claimed',
+                    'completed',
+                    'unknown',
+                    'cancelled'
+                )
+            ),
+        attempt_count INTEGER NOT NULL DEFAULT 0
+            CHECK (attempt_count >= 0),
+        claim_id TEXT,
+        claimed_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        released_at TIMESTAMPTZ,
+        unknown_at TIMESTAMPTZ,
+        cancelled_at TIMESTAMPTZ,
+        cancel_reason TEXT,
+        recovered_at TIMESTAMPTZ,
+        recovery_outcome TEXT
+            CHECK (
+                recovery_outcome IS NULL
+                OR recovery_outcome IN (
+                    'side_effect_confirmed',
+                    'side_effect_not_applied'
+                )
+            ),
+        recovery_reason TEXT,
+        recovery_count INTEGER NOT NULL DEFAULT 0
+            CHECK (recovery_count >= 0),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
 )
 
 
@@ -128,6 +174,12 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _optional_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return _as_utc(value)
+
+
 def _grant_from_row(row: tuple[Any, ...]) -> DelegationGrant:
     return DelegationGrant(
         grant_id=row[0],
@@ -166,6 +218,47 @@ def _tool_from_row(row: tuple[Any, ...]) -> ToolRegistration:
         implementation_id=row[1],
         allowed_actions=frozenset(row[2]),
     )
+
+
+def _execution_from_row(row: tuple[Any, ...]) -> ExecutionRecord:
+    recovery_outcome = None if row[12] is None else ExecutionRecoveryOutcome(row[12])
+
+    return ExecutionRecord(
+        invocation_id=row[0],
+        expires_at=_as_utc(row[1]),
+        state=ExecutionState(row[2]),
+        attempt_count=row[3],
+        claim_id=row[4],
+        claimed_at=_optional_utc(row[5]),
+        completed_at=_optional_utc(row[6]),
+        released_at=_optional_utc(row[7]),
+        unknown_at=_optional_utc(row[8]),
+        cancelled_at=_optional_utc(row[9]),
+        cancel_reason=row[10],
+        recovered_at=_optional_utc(row[11]),
+        recovery_outcome=recovery_outcome,
+        recovery_reason=row[13],
+        recovery_count=row[14],
+    )
+
+
+_EXECUTION_COLUMNS = """
+    invocation_id,
+    expires_at,
+    state,
+    attempt_count,
+    claim_id,
+    claimed_at,
+    completed_at,
+    released_at,
+    unknown_at,
+    cancelled_at,
+    cancel_reason,
+    recovered_at,
+    recovery_outcome,
+    recovery_reason,
+    recovery_count
+"""
 
 
 class PostgresGrantStore:
@@ -550,3 +643,438 @@ class PostgresToolRegistry:
             return False
 
         return action in registration.allowed_actions
+
+
+class PostgresExecutionStore:
+    """Durable distributed execution lifecycle backed by PostgreSQL.
+
+    PostgreSQL is the concurrency authority. Claim ownership is fenced by the
+    tuple ``(invocation_id, claim_id, attempt_count)`` so stale workers cannot
+    mutate a newer execution attempt.
+    """
+
+    def __init__(self, pool: ConnectionPool) -> None:
+        self._pool = pool
+
+    def get(self, invocation_id: str) -> ExecutionRecord | None:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT {_EXECUTION_COLUMNS}
+                    FROM ruhusa_executions
+                    WHERE invocation_id = %s
+                    """,
+                    (invocation_id,),
+                )
+                row = cur.fetchone()
+
+        return None if row is None else _execution_from_row(row)
+
+    def claim(
+        self,
+        invocation_id: str,
+        *,
+        expires_at: datetime,
+        now: datetime | None = None,
+    ) -> ExecutionClaimResult:
+        now = _as_utc(now or datetime.now(UTC))
+        canonical_expiry = _as_utc(expires_at)
+
+        if now >= canonical_expiry:
+            return ExecutionClaimResult(
+                allowed=False,
+                reason="execution authority has expired",
+            )
+
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                # The PK guarantees one canonical execution row.
+                #
+                # Concurrent inserts for the same invocation serialize through
+                # PostgreSQL's unique constraint. The following SELECT FOR
+                # UPDATE then makes the state inspection/update atomic.
+                cur.execute(
+                    """
+                    INSERT INTO ruhusa_executions (
+                        invocation_id,
+                        expires_at
+                    )
+                    VALUES (%s, %s)
+                    ON CONFLICT (invocation_id) DO NOTHING
+                    """,
+                    (
+                        invocation_id,
+                        canonical_expiry,
+                    ),
+                )
+
+                cur.execute(
+                    f"""
+                    SELECT {_EXECUTION_COLUMNS}
+                    FROM ruhusa_executions
+                    WHERE invocation_id = %s
+                    FOR UPDATE
+                    """,
+                    (invocation_id,),
+                )
+                row = cur.fetchone()
+
+                if row is None:
+                    raise RuntimeError("execution lifecycle row disappeared during claim")
+
+                record = _execution_from_row(row)
+
+                if _as_utc(record.expires_at) != canonical_expiry:
+                    return ExecutionClaimResult(
+                        allowed=False,
+                        reason=("execution lifecycle expiry does not match canonical invocation"),
+                        record=record,
+                    )
+
+                if record.state is not ExecutionState.AVAILABLE:
+                    return ExecutionClaimResult(
+                        allowed=False,
+                        reason=(f"execution authority is already {record.state.value}"),
+                        record=record,
+                    )
+
+                claim_id = uuid4().hex
+                attempt = record.attempt_count + 1
+
+                cur.execute(
+                    f"""
+                    UPDATE ruhusa_executions
+                    SET
+                        state = %s,
+                        attempt_count = %s,
+                        claim_id = %s,
+                        claimed_at = %s,
+                        completed_at = NULL,
+                        released_at = NULL,
+                        unknown_at = NULL,
+                        cancelled_at = NULL,
+                        cancel_reason = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE invocation_id = %s
+                    RETURNING {_EXECUTION_COLUMNS}
+                    """,
+                    (
+                        ExecutionState.CLAIMED.value,
+                        attempt,
+                        claim_id,
+                        now,
+                        invocation_id,
+                    ),
+                )
+                updated_row = cur.fetchone()
+
+                if updated_row is None:
+                    raise RuntimeError("execution lifecycle claim update returned no row")
+
+        updated = _execution_from_row(updated_row)
+
+        return ExecutionClaimResult(
+            allowed=True,
+            reason="execution authority claimed",
+            record=updated,
+            permit=ExecutionPermit(
+                invocation_id=invocation_id,
+                claim_id=claim_id,
+                attempt=attempt,
+            ),
+        )
+
+    def is_active(self, permit: ExecutionPermit) -> bool:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM ruhusa_executions
+                        WHERE
+                            invocation_id = %s
+                            AND state = %s
+                            AND claim_id = %s
+                            AND attempt_count = %s
+                    )
+                    """,
+                    (
+                        permit.invocation_id,
+                        ExecutionState.CLAIMED.value,
+                        permit.claim_id,
+                        permit.attempt,
+                    ),
+                )
+                row = cur.fetchone()
+
+        return bool(row and row[0])
+
+    def complete(
+        self,
+        permit: ExecutionPermit,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        now = _as_utc(now or datetime.now(UTC))
+
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE ruhusa_executions
+                    SET
+                        state = %s,
+                        completed_at = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE
+                        invocation_id = %s
+                        AND state = %s
+                        AND claim_id = %s
+                        AND attempt_count = %s
+                    RETURNING invocation_id
+                    """,
+                    (
+                        ExecutionState.COMPLETED.value,
+                        now,
+                        permit.invocation_id,
+                        ExecutionState.CLAIMED.value,
+                        permit.claim_id,
+                        permit.attempt,
+                    ),
+                )
+                return cur.fetchone() is not None
+
+    def release_before_execution(
+        self,
+        permit: ExecutionPermit,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        now = _as_utc(now or datetime.now(UTC))
+
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE ruhusa_executions
+                    SET
+                        state = %s,
+                        claim_id = NULL,
+                        released_at = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE
+                        invocation_id = %s
+                        AND state = %s
+                        AND claim_id = %s
+                        AND attempt_count = %s
+                    RETURNING invocation_id
+                    """,
+                    (
+                        ExecutionState.AVAILABLE.value,
+                        now,
+                        permit.invocation_id,
+                        ExecutionState.CLAIMED.value,
+                        permit.claim_id,
+                        permit.attempt,
+                    ),
+                )
+                return cur.fetchone() is not None
+
+    def mark_unknown(
+        self,
+        permit: ExecutionPermit,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        now = _as_utc(now or datetime.now(UTC))
+
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE ruhusa_executions
+                    SET
+                        state = %s,
+                        unknown_at = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE
+                        invocation_id = %s
+                        AND state = %s
+                        AND claim_id = %s
+                        AND attempt_count = %s
+                    RETURNING invocation_id
+                    """,
+                    (
+                        ExecutionState.UNKNOWN.value,
+                        now,
+                        permit.invocation_id,
+                        ExecutionState.CLAIMED.value,
+                        permit.claim_id,
+                        permit.attempt,
+                    ),
+                )
+                return cur.fetchone() is not None
+
+    def mark_stale_claim_unknown(
+        self,
+        invocation_id: str,
+        *,
+        stale_after: timedelta,
+        now: datetime | None = None,
+    ) -> bool:
+        if stale_after <= timedelta(0):
+            raise ValueError("stale_after must be greater than zero")
+
+        now = _as_utc(now or datetime.now(UTC))
+        stale_cutoff = now - stale_after
+
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE ruhusa_executions
+                    SET
+                        state = %s,
+                        unknown_at = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE
+                        invocation_id = %s
+                        AND state = %s
+                        AND claimed_at IS NOT NULL
+                        AND claimed_at <= %s
+                    RETURNING invocation_id
+                    """,
+                    (
+                        ExecutionState.UNKNOWN.value,
+                        now,
+                        invocation_id,
+                        ExecutionState.CLAIMED.value,
+                        stale_cutoff,
+                    ),
+                )
+                return cur.fetchone() is not None
+
+    def reconcile_unknown(
+        self,
+        invocation_id: str,
+        *,
+        outcome: ExecutionRecoveryOutcome,
+        reason: str,
+        now: datetime | None = None,
+    ) -> bool:
+        reason = reason.strip()
+
+        if not reason:
+            raise ValueError("recovery reason must not be empty")
+
+        now = _as_utc(now or datetime.now(UTC))
+
+        if outcome is ExecutionRecoveryOutcome.SIDE_EFFECT_CONFIRMED:
+            new_state = ExecutionState.COMPLETED
+        elif outcome is ExecutionRecoveryOutcome.SIDE_EFFECT_NOT_APPLIED:
+            new_state = ExecutionState.AVAILABLE
+        else:
+            raise ValueError(f"unsupported recovery outcome: {outcome}")
+
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                if outcome is ExecutionRecoveryOutcome.SIDE_EFFECT_CONFIRMED:
+                    cur.execute(
+                        """
+                        UPDATE ruhusa_executions
+                        SET
+                            state = %s,
+                            completed_at = %s,
+                            recovered_at = %s,
+                            recovery_outcome = %s,
+                            recovery_reason = %s,
+                            recovery_count = recovery_count + 1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE
+                            invocation_id = %s
+                            AND state = %s
+                        RETURNING invocation_id
+                        """,
+                        (
+                            new_state.value,
+                            now,
+                            now,
+                            outcome.value,
+                            reason,
+                            invocation_id,
+                            ExecutionState.UNKNOWN.value,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE ruhusa_executions
+                        SET
+                            state = %s,
+                            claim_id = NULL,
+                            released_at = %s,
+                            recovered_at = %s,
+                            recovery_outcome = %s,
+                            recovery_reason = %s,
+                            recovery_count = recovery_count + 1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE
+                            invocation_id = %s
+                            AND state = %s
+                        RETURNING invocation_id
+                        """,
+                        (
+                            new_state.value,
+                            now,
+                            now,
+                            outcome.value,
+                            reason,
+                            invocation_id,
+                            ExecutionState.UNKNOWN.value,
+                        ),
+                    )
+
+                return cur.fetchone() is not None
+
+    def cancel(
+        self,
+        permit: ExecutionPermit,
+        *,
+        reason: str,
+        now: datetime | None = None,
+    ) -> bool:
+        if not reason.strip():
+            raise ValueError("cancellation reason must not be empty")
+
+        now = _as_utc(now or datetime.now(UTC))
+
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE ruhusa_executions
+                    SET
+                        state = %s,
+                        cancelled_at = %s,
+                        cancel_reason = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE
+                        invocation_id = %s
+                        AND state = %s
+                        AND claim_id = %s
+                        AND attempt_count = %s
+                    RETURNING invocation_id
+                    """,
+                    (
+                        ExecutionState.CANCELLED.value,
+                        now,
+                        reason,
+                        permit.invocation_id,
+                        ExecutionState.CLAIMED.value,
+                        permit.claim_id,
+                        permit.attempt,
+                    ),
+                )
+                return cur.fetchone() is not None
