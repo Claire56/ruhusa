@@ -155,7 +155,7 @@ def test_multiple_events_form_continuous_chain(pool) -> None:
     assert len(events) == 10
     assert events[0].previous_hash == "GENESIS"
 
-    for previous, current in zip(events, events[1:], strict=True):
+    for previous, current in zip(events, events[1:]):
         assert current.previous_hash == previous.event_hash
 
     assert log.verify_chain()
@@ -185,7 +185,7 @@ def test_concurrent_appends_create_one_chain(pool) -> None:
     assert len(events) == worker_count
     assert events[0].previous_hash == "GENESIS"
 
-    for previous, current in zip(events, events[1:], strict=True):
+    for previous, current in zip(events, events[1:]):
         assert current.previous_hash == previous.event_hash
 
     assert log.verify_chain()
