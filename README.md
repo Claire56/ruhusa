@@ -39,9 +39,9 @@ action may proceed.
 
 ## Project Status
 
-**Current package version:** `0.7.0rc1`
+**Current package version:** `0.7.0`
 **Current milestone:** `v0.7` — production interfaces and durable persistence
-**Release status:** release candidate
+**Release status:** stable release
 
 v0.7 preserves the frozen v0.6 research behavior while adding stable
 dependency protocols and optional PostgreSQL-backed durable security state.

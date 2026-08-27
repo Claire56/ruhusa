@@ -2,7 +2,7 @@
 
 ## Status
 
-Ruhusa `0.7.0rc1` is a release candidate for the first production-capable
+Ruhusa `0.7.0` is a stable release for the first production-capable
 Ruhusa persistence architecture.
 
 The v0.6 research artifact remains frozen separately.
@@ -83,7 +83,7 @@ not serialize arbitrary Python policy conditions into PostgreSQL.
 
 ## Release gate
 
-`0.7.0rc1` may advance to `0.7.0` only when:
+`0.7.0` may advance to `0.7.0` only when:
 
 - formatting passes;
 - linting passes;
