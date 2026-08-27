@@ -73,4 +73,7 @@ jobs:
         run: uv sync --locked --extra postgres
 
       - name: Run PostgreSQL integration tests
-        run: uv run pytest tests/test_postgres_stores.py
+        run: >-
+          uv run pytest
+          tests/test_postgres_stores.py
+          tests/test_postgres_execution_store.py
