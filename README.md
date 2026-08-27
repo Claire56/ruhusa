@@ -10,7 +10,9 @@ Ruhusa means **permission** in Swahili.
 
 ## Overview
 
-Ruhusa is an open-source research framework for studying continuous, least-privilege authorization across AI agents, tools, and multi-agent workflows.
+Ruhusa is an open-source authorization framework and research artifact for
+continuous, least-privilege authorization across AI agents, tools, and
+multi-agent workflows.
 
 The framework separates agent reasoning from authorization:
 
@@ -29,18 +31,26 @@ ALLOW | DENY | REQUIRE_APPROVAL
 Protected Tool / API / Resource
 ```
 
-Ruhusa is not an agent framework, workflow engine, identity provider, LLM gateway, or production IAM replacement. Its purpose is to provide a small, inspectable authorization layer for studying how authority behaves as agent workflows delegate, replan, invoke tools, encounter revocation, and cross trust boundaries.
+Ruhusa is not an agent framework, workflow engine, identity provider,
+LLM gateway, or general-purpose IAM system.
+Its purpose is to provide a small, inspectable authorization boundary in
+which trusted policy and provenance determine whether an agent-proposed
+action may proceed.
 
 ## Project Status
 
-**Current package version:** `0.6.0`
-**Current research milestone:** `v0.6` — execution lifecycle, execution-time authority, and recovery
-**Milestone status:** complete and validated
-**Release status:** pre-1.0 research framework
+**Current package version:** `0.7.0rc1`
+**Current milestone:** `v0.7` — production interfaces and durable persistence
+**Release status:** release candidate
 
-v0.6 closes the execution-lifecycle research milestone while retaining explicit boundaries around distributed execution, downstream idempotency, recovery-evidence provenance, and exactly-once external side effects.
+v0.7 preserves the frozen v0.6 research behavior while adding stable
+dependency protocols and optional PostgreSQL-backed durable security state.
 
-APIs and security guarantees may change before 1.0.
+PostgreSQL-backed implementations are available for grants, revocations,
+invocations, trusted tool registrations, execution lifecycle, and audit.
+
+Ruhusa remains pre-1.0. Public APIs and guarantees may still evolve before
+1.0.
 
 ## Current Capabilities
 
@@ -76,6 +86,22 @@ Ruhusa currently includes research implementations for:
 - process-local single-winner reconciliation semantics
 - stale-permit protection across recovered execution attempts
 - adversarial attack benchmarks
+
+Production persistence capabilities include:
+
+- stable persistence protocols independent of concrete backends
+- optional PostgreSQL installation through `ruhusa[postgres]`
+- immutable PostgreSQL grant registration
+- monotonic PostgreSQL revocation
+- immutable PostgreSQL invocation provenance
+- immutable trusted tool implementation registration
+- database-authoritative execution claims
+- cross-process single-winner execution semantics
+- stale-permit execution fencing
+- durable `UNKNOWN` execution recovery
+- serialized PostgreSQL audit writes
+- tamper-evident PostgreSQL audit-chain verification
+- fail-closed PostgreSQL backend failure behavior
 
 Not every configuration provides the same security guarantees. Self-asserted identity fields in weak mode remain intentionally benchmarked as forgeable.
 
@@ -123,13 +149,18 @@ presented delegation objects
 TRUSTED / CANONICAL
 --------------------------------
 Ruhusa authorization core
-StaticPolicyStore
-InMemoryGrantStore
-InMemoryRevocationStore
-InMemoryInvocationStore
-InMemoryToolRegistry
-InMemoryExecutionStore
-InMemoryAuditLog
+PolicyStore
+GrantStore
+RevocationStore
+InvocationStore
+ToolRegistry
+ExecutionStore
+AuditLog
+
+Reference implementations:
+- in-memory stores for local/research use
+- PostgreSQL stores for durable production state
+
 trusted orchestration state
 ```
 
@@ -157,7 +188,7 @@ Weak mode is therefore a compatibility and consistency mode, not a trusted prove
 
 ### Strong mode
 
-With `InMemoryInvocationStore`, a trusted orchestration layer creates a canonical `InvocationRecord` that binds:
+With a trusted `InvocationStore`, a trusted orchestration layer creates a canonical `InvocationRecord` that binds:
 
 ```text
 invoker
@@ -363,7 +394,24 @@ The repository separates architecture, security assumptions, and experimental ev
 ## Requirements
 
 - Python 3.12+
-- [`uv`](https://docs.astral.sh/uv/)
+- PostgreSQL for durable production persistence
+- [`uv`](https://docs.astral.sh/uv/) for repository development
+
+## Installation
+
+Core installation:
+
+```bash
+pip install ruhusa
+```
+
+PostgreSQL persistence:
+
+```bash
+pip install "ruhusa[postgres]"
+```
+
+The core package does not require PostgreSQL dependencies.
 
 ## Development
 
@@ -480,6 +528,16 @@ v0.6-C adds fail-closed stale-claim recovery and explicit reconciliation of `UNK
 
 The remaining boundary is deliberate: Ruhusa does not make authorization, recovery state, and a remote side effect transactionally atomic. It also does not authenticate reconciliation evidence, provide durable distributed recovery, or guarantee downstream idempotency or exactly-once execution.
 
+### v0.7 — Production Interfaces and Durable Persistence
+
+Introduced stable persistence protocols and optional PostgreSQL-backed
+implementations for security state.
+
+v0.7 adds database-authoritative execution fencing, durable uncertain
+execution recovery, serialized audit-chain persistence, and explicit
+backend failure contracts while preserving the frozen v0.6 research
+artifact.
+
 ## Research Direction
 
 The working research question is:
@@ -521,7 +579,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 See [`SECURITY.md`](SECURITY.md).
 
-Ruhusa is a research framework and should not be treated as a production security boundary.
+See `docs/production/release-readiness.md` for the v0.7 production deployment requirements and explicit non-guarantees.
 
 ## License
 

@@ -155,3 +155,24 @@ The following are intentionally deferred:
 - MCP adapters
 - deployment infrastructure
 - SQL-backed policy definitions
+
+## Schema compatibility
+
+Ruhusa v0.7 uses PostgreSQL schema version `1`.
+
+`initialize_postgres_schema()` first reads the schema metadata for an
+already-versioned database before executing application-table DDL.
+
+If the stored schema version does not equal the version supported by the
+running Ruhusa package, initialization raises an error.
+
+Ruhusa does not automatically migrate an incompatible schema.
+
+This is intentional fail-closed behavior: a process must not silently run
+against security state whose representation it does not understand.
+
+Schema initialization is idempotent for a compatible version and does not
+delete or replace existing authorization state.
+
+Version `1` is the first publicly released PostgreSQL schema. Future schema
+changes will require an explicit migration strategy.
