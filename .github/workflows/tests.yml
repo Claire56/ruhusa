@@ -34,3 +34,43 @@ jobs:
 
       - name: Build package
         run: uv build
+
+  postgres:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ruhusa_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ruhusa_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      RUHUSA_TEST_POSTGRES_DSN: >-
+        postgresql://postgres:postgres@localhost:5432/ruhusa_test
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Sync project with PostgreSQL support
+        run: uv sync --locked --extra postgres
+
+      - name: Run PostgreSQL integration tests
+        run: uv run pytest tests/test_postgres_stores.py
