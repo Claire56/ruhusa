@@ -77,3 +77,4 @@ jobs:
           uv run pytest
           tests/test_postgres_stores.py
           tests/test_postgres_execution_store.py
+          tests/test_postgres_audit.py

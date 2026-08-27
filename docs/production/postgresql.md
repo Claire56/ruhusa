@@ -5,16 +5,14 @@ the stable persistence protocols defined in v0.7-A.
 
 ## Scope
 
-The PostgreSQL persistence layer currently includes:
+The PostgreSQL persistence layer includes:
 
 - `PostgresGrantStore`
 - `PostgresRevocationStore`
 - `PostgresInvocationStore`
 - `PostgresToolRegistry`
 - `PostgresExecutionStore`
-
-Durable audit logging is implemented separately because concurrent
-audit-chain persistence requires additional serialization guarantees.
+- `PostgresAuditLog`
 
 ## Installation
 
@@ -30,6 +28,7 @@ The base Ruhusa package does not require PostgreSQL dependencies.
 
 ```python
 from ruhusa.postgres import (
+    PostgresAuditLog,
     PostgresExecutionStore,
     PostgresGrantStore,
     PostgresInvocationStore,
@@ -48,6 +47,7 @@ revocation_store = PostgresRevocationStore(pool)
 invocation_store = PostgresInvocationStore(pool)
 tool_registry = PostgresToolRegistry(pool)
 execution_store = PostgresExecutionStore(pool)
+audit_log = PostgresAuditLog(pool)
 ```
 
 Schema initialization is explicit. Constructing a store does not
@@ -107,6 +107,29 @@ Only trusted reconciliation may resolve `UNKNOWN`:
 - confirmed side effect → `COMPLETED`
 - confirmed no side effect → `AVAILABLE`
 
+### Durable audit chain
+
+`PostgresAuditLog` serializes concurrent audit writers through a
+single PostgreSQL chain-head row.
+
+Each event contains the hash of the preceding event. The event and
+chain-head update occur within one database transaction.
+
+This provides:
+
+- deterministic event ordering
+- cross-process append serialization
+- detection of missing events
+- detection of modified event contents
+- detection of an inconsistent chain head
+- fail-closed behavior when audit persistence is unavailable
+
+The hash chain is tamper-evident, not cryptographically immutable
+against a database administrator who can rewrite the entire database
+and recompute the chain. Deployments requiring stronger non-repudiation
+should externally anchor or sign audit checkpoints. External anchoring
+is outside the v0.7-B scope.
+
 ### Backend failures
 
 PostgreSQL errors are not translated into `None`, `False`, or
@@ -126,7 +149,6 @@ the PostgreSQL stores.
 
 The following are intentionally deferred:
 
-- PostgreSQL audit log
 - Redis
 - FastAPI
 - LangGraph adapters
