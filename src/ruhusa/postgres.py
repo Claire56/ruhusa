@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import uuid
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -16,7 +20,13 @@ from .execution import (
     ExecutionState,
 )
 from .invocations import InvocationRecord
-from .models import DelegationGrant, Scope
+from .audit import AuditEvent, _redact
+from .models import (
+    AuthorizationDecision,
+    AuthorizationRequest,
+    DelegationGrant,
+    Scope,
+)
 from .revocation import RevocationRecord
 from .tools import ToolRegistration
 
@@ -76,6 +86,54 @@ _SCHEMA_STATEMENTS = (
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (tool_id, implementation_id)
     )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_audit_chain (
+        singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+        last_sequence BIGINT NOT NULL DEFAULT 0
+            CHECK (last_sequence >= 0),
+        last_hash TEXT NOT NULL DEFAULT 'GENESIS',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_audit_events (
+        sequence BIGINT PRIMARY KEY
+            CHECK (sequence > 0),
+        audit_id TEXT NOT NULL UNIQUE,
+        timestamp TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        resource TEXT NOT NULL,
+        arguments JSONB NOT NULL,
+        effect TEXT NOT NULL
+            CHECK (
+                effect IN (
+                    'allow',
+                    'deny',
+                    'require_approval'
+                )
+            ),
+        reason TEXT NOT NULL,
+        policy_id TEXT,
+        previous_hash TEXT NOT NULL,
+        event_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    INSERT INTO ruhusa_audit_chain (
+        singleton,
+        last_sequence,
+        last_hash
+    )
+    VALUES (
+        TRUE,
+        0,
+        'GENESIS'
+    )
+    ON CONFLICT (singleton) DO NOTHING
     """,
     """
     CREATE TABLE IF NOT EXISTS ruhusa_executions (
@@ -157,7 +215,9 @@ def initialize_postgres_schema(pool: ConnectionPool) -> None:
                 (SCHEMA_VERSION,),
             )
 
-            cur.execute("SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE")
+            cur.execute(
+                "SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE"
+            )
             row = cur.fetchone()
 
             if row is None or row[0] != SCHEMA_VERSION:
@@ -259,6 +319,79 @@ _EXECUTION_COLUMNS = """
     recovery_reason,
     recovery_count
 """
+
+_AUDIT_EVENT_COLUMNS = """
+    audit_id,
+    timestamp,
+    principal_id,
+    task_id,
+    action,
+    resource,
+    arguments,
+    effect,
+    reason,
+    policy_id,
+    previous_hash,
+    event_hash
+"""
+
+
+def _audit_event_from_row(row: tuple[Any, ...]) -> AuditEvent:
+    return AuditEvent(
+        audit_id=row[0],
+        timestamp=row[1],
+        principal_id=row[2],
+        task_id=row[3],
+        action=row[4],
+        resource=row[5],
+        arguments=dict(row[6]),
+        effect=row[7],
+        reason=row[8],
+        policy_id=row[9],
+        previous_hash=row[10],
+        event_hash=row[11],
+    )
+
+
+def _build_audit_payload(
+    request: AuthorizationRequest,
+    decision: AuthorizationDecision,
+    *,
+    audit_id: str,
+    timestamp: str,
+    previous_hash: str,
+) -> dict[str, Any]:
+    return {
+        "audit_id": audit_id,
+        "timestamp": timestamp,
+        "principal_id": request.principal.principal_id,
+        "task_id": request.task.task_id,
+        "action": request.action,
+        "resource": request.resource,
+        "arguments": _redact(dict(request.arguments)),
+        "effect": decision.effect.value,
+        "reason": decision.reason,
+        "policy_id": decision.policy_id,
+        "previous_hash": previous_hash,
+    }
+
+
+def _serialize_audit_payload(
+    payload: dict[str, Any],
+) -> str:
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _calculate_audit_hash(
+    payload: dict[str, Any],
+) -> str:
+    serialized = _serialize_audit_payload(payload)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 class PostgresGrantStore:
@@ -510,7 +643,9 @@ class PostgresInvocationStore:
                         ),
                     )
         except UniqueViolation as exc:
-            raise ValueError(f"invocation {record.invocation_id!r} is already registered") from exc
+            raise ValueError(
+                f"invocation {record.invocation_id!r} is already registered"
+            ) from exc
 
         return record
 
@@ -721,14 +856,18 @@ class PostgresExecutionStore:
                 row = cur.fetchone()
 
                 if row is None:
-                    raise RuntimeError("execution lifecycle row disappeared during claim")
+                    raise RuntimeError(
+                        "execution lifecycle row disappeared during claim"
+                    )
 
                 record = _execution_from_row(row)
 
                 if _as_utc(record.expires_at) != canonical_expiry:
                     return ExecutionClaimResult(
                         allowed=False,
-                        reason=("execution lifecycle expiry does not match canonical invocation"),
+                        reason=(
+                            "execution lifecycle expiry does not match canonical invocation"
+                        ),
                         record=record,
                     )
 
@@ -770,7 +909,9 @@ class PostgresExecutionStore:
                 updated_row = cur.fetchone()
 
                 if updated_row is None:
-                    raise RuntimeError("execution lifecycle claim update returned no row")
+                    raise RuntimeError(
+                        "execution lifecycle claim update returned no row"
+                    )
 
         updated = _execution_from_row(updated_row)
 
@@ -1078,3 +1219,290 @@ class PostgresExecutionStore:
                     ),
                 )
                 return cur.fetchone() is not None
+
+
+class PostgresAuditLog:
+    """Durable serialized hash-chain audit log backed by PostgreSQL.
+
+    PostgreSQL serializes writers through one chain-head row. Each event is
+    committed atomically with the corresponding chain-head update, preventing
+    concurrent writers from creating independent audit branches.
+    """
+
+    def __init__(self, pool: ConnectionPool) -> None:
+        self._pool = pool
+
+    def append(
+        self,
+        request: AuthorizationRequest,
+        decision: AuthorizationDecision,
+    ) -> str:
+        audit_id = str(uuid.uuid4())
+        timestamp = datetime.now(UTC).isoformat()
+
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                # Serialize every writer on the canonical chain head.
+                cur.execute(
+                    """
+                    SELECT
+                        last_sequence,
+                        last_hash
+                    FROM ruhusa_audit_chain
+                    WHERE singleton = TRUE
+                    FOR UPDATE
+                    """
+                )
+                head = cur.fetchone()
+
+                if head is None:
+                    raise RuntimeError("PostgreSQL audit chain head is missing")
+
+                last_sequence = int(head[0])
+                previous_hash = str(head[1])
+
+                # Cheap consistency check before extending the chain.
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*),
+                        COALESCE(MAX(sequence), 0)
+                    FROM ruhusa_audit_events
+                    """
+                )
+                statistics = cur.fetchone()
+
+                if statistics is None:
+                    raise RuntimeError("unable to inspect PostgreSQL audit chain")
+
+                event_count = int(statistics[0])
+                maximum_sequence = int(statistics[1])
+
+                if event_count != last_sequence or maximum_sequence != last_sequence:
+                    raise RuntimeError(
+                        "PostgreSQL audit chain head is inconsistent "
+                        "with persisted events"
+                    )
+
+                if last_sequence == 0:
+                    if previous_hash != "GENESIS":
+                        raise RuntimeError(
+                            "empty PostgreSQL audit chain does not reference GENESIS"
+                        )
+                else:
+                    cur.execute(
+                        """
+                        SELECT event_hash
+                        FROM ruhusa_audit_events
+                        WHERE sequence = %s
+                        """,
+                        (last_sequence,),
+                    )
+                    tail = cur.fetchone()
+
+                    if tail is None or tail[0] != previous_hash:
+                        raise RuntimeError(
+                            "PostgreSQL audit chain head does not match persisted tail"
+                        )
+
+                next_sequence = last_sequence + 1
+
+                payload = _build_audit_payload(
+                    request,
+                    decision,
+                    audit_id=audit_id,
+                    timestamp=timestamp,
+                    previous_hash=previous_hash,
+                )
+
+                # Normalize types through JSON round-trip so stored values
+                # match what will be re-serialized during verify_chain.
+                serialized = _serialize_audit_payload(payload)
+                canonical_payload = json.loads(serialized)
+
+                event_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+                cur.execute(
+                    """
+                    INSERT INTO ruhusa_audit_events (
+                        sequence,
+                        audit_id,
+                        timestamp,
+                        principal_id,
+                        task_id,
+                        action,
+                        resource,
+                        arguments,
+                        effect,
+                        reason,
+                        policy_id,
+                        previous_hash,
+                        event_hash
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        next_sequence,
+                        canonical_payload["audit_id"],
+                        canonical_payload["timestamp"],
+                        canonical_payload["principal_id"],
+                        canonical_payload["task_id"],
+                        canonical_payload["action"],
+                        canonical_payload["resource"],
+                        Jsonb(canonical_payload["arguments"]),
+                        canonical_payload["effect"],
+                        canonical_payload["reason"],
+                        canonical_payload["policy_id"],
+                        canonical_payload["previous_hash"],
+                        event_hash,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    UPDATE ruhusa_audit_chain
+                    SET
+                        last_sequence = %s,
+                        last_hash = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE
+                        singleton = TRUE
+                        AND last_sequence = %s
+                        AND last_hash = %s
+                    RETURNING singleton
+                    """,
+                    (
+                        next_sequence,
+                        event_hash,
+                        last_sequence,
+                        previous_hash,
+                    ),
+                )
+
+                if cur.fetchone() is None:
+                    raise RuntimeError(
+                        "PostgreSQL audit chain head changed during append"
+                    )
+
+        return audit_id
+
+    def get(
+        self,
+        audit_id: str,
+    ) -> AuditEvent | None:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT {_AUDIT_EVENT_COLUMNS}
+                    FROM ruhusa_audit_events
+                    WHERE audit_id = %s
+                    """,
+                    (audit_id,),
+                )
+                row = cur.fetchone()
+
+        if row is None:
+            return None
+
+        return _audit_event_from_row(row)
+
+    def snapshot(
+        self,
+    ) -> tuple[AuditEvent, ...]:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                # Prevent an append from changing the chain while the
+                # point-in-time snapshot is being assembled.
+                cur.execute(
+                    """
+                    SELECT
+                        last_sequence,
+                        last_hash
+                    FROM ruhusa_audit_chain
+                    WHERE singleton = TRUE
+                    FOR SHARE
+                    """
+                )
+
+                if cur.fetchone() is None:
+                    raise RuntimeError("PostgreSQL audit chain head is missing")
+
+                cur.execute(
+                    f"""
+                    SELECT {_AUDIT_EVENT_COLUMNS}
+                    FROM ruhusa_audit_events
+                    ORDER BY sequence
+                    """
+                )
+                rows = cur.fetchall()
+
+        return tuple(_audit_event_from_row(row) for row in rows)
+
+    def verify_chain(self) -> bool:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                # SHARE conflicts with the writer's FOR UPDATE lock, giving
+                # verification a stable chain while it runs.
+                cur.execute(
+                    """
+                    SELECT
+                        last_sequence,
+                        last_hash
+                    FROM ruhusa_audit_chain
+                    WHERE singleton = TRUE
+                    FOR SHARE
+                    """
+                )
+                head = cur.fetchone()
+
+                if head is None:
+                    raise RuntimeError("PostgreSQL audit chain head is missing")
+
+                last_sequence = int(head[0])
+                last_hash = str(head[1])
+
+                cur.execute(
+                    f"""
+                    SELECT
+                        sequence,
+                        {_AUDIT_EVENT_COLUMNS}
+                    FROM ruhusa_audit_events
+                    ORDER BY sequence
+                    """
+                )
+                rows = cur.fetchall()
+
+                if len(rows) != last_sequence:
+                    return False
+
+                previous_hash = "GENESIS"
+                expected_sequence = 1
+
+                for row in rows:
+                    sequence = int(row[0])
+
+                    if sequence != expected_sequence:
+                        return False
+
+                    event = _audit_event_from_row(row[1:])
+
+                    if event.previous_hash != previous_hash:
+                        return False
+
+                    payload = asdict(event)
+                    persisted_event_hash = payload.pop("event_hash")
+                    calculated_hash = _calculate_audit_hash(payload)
+
+                    if calculated_hash != persisted_event_hash:
+                        return False
+
+                    previous_hash = persisted_event_hash
+                    expected_sequence += 1
+
+                if last_sequence == 0:
+                    return last_hash == "GENESIS"
+
+                return previous_hash == last_hash
