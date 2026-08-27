@@ -32,14 +32,15 @@ from .tools import ToolRegistration
 
 SCHEMA_VERSION = 1
 
+_SCHEMA_METADATA_STATEMENT = """
+CREATE TABLE IF NOT EXISTS ruhusa_schema_metadata (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    version INTEGER NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 _SCHEMA_STATEMENTS = (
-    """
-    CREATE TABLE IF NOT EXISTS ruhusa_schema_metadata (
-        singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-        version INTEGER NOT NULL,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-    """,
     """
     CREATE TABLE IF NOT EXISTS ruhusa_grants (
         grant_id TEXT PRIMARY KEY,
@@ -200,26 +201,64 @@ def create_postgres_pool(
 
 
 def initialize_postgres_schema(pool: ConnectionPool) -> None:
-    """Create the v0.7-B PostgreSQL schema and verify its version."""
+    """Initialize or validate the Ruhusa PostgreSQL schema.
+
+    Schema version compatibility is checked before Ruhusa executes
+    application-table DDL against an already-versioned database.
+    """
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            for statement in _SCHEMA_STATEMENTS:
-                cur.execute(statement)
+            # The metadata table is the only object we may create before
+            # determining compatibility.
+            cur.execute(_SCHEMA_METADATA_STATEMENT)
 
             cur.execute(
                 """
-                INSERT INTO ruhusa_schema_metadata (singleton, version)
-                VALUES (TRUE, %s)
-                ON CONFLICT (singleton) DO NOTHING
-                """,
-                (SCHEMA_VERSION,),
+                SELECT version
+                FROM ruhusa_schema_metadata
+                WHERE singleton = TRUE
+                """
             )
-
-            cur.execute("SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE")
             row = cur.fetchone()
 
-            if row is None or row[0] != SCHEMA_VERSION:
-                found = None if row is None else row[0]
+            # An already-versioned incompatible database must be rejected
+            # before application-table DDL is attempted.
+            if row is not None and row[0] != SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"unsupported Ruhusa PostgreSQL schema version {row[0]!r}; "
+                    f"expected {SCHEMA_VERSION}"
+                )
+
+            for statement in _SCHEMA_STATEMENTS:
+                cur.execute(statement)
+
+            # Fresh/unversioned database: establish schema version 1.
+            if row is None:
+                cur.execute(
+                    """
+                    INSERT INTO ruhusa_schema_metadata (
+                        singleton,
+                        version
+                    )
+                    VALUES (TRUE, %s)
+                    ON CONFLICT (singleton) DO NOTHING
+                    """,
+                    (SCHEMA_VERSION,),
+                )
+
+            # Re-read because concurrent initializers may have raced on a
+            # previously empty database.
+            cur.execute(
+                """
+                SELECT version
+                FROM ruhusa_schema_metadata
+                WHERE singleton = TRUE
+                """
+            )
+            verified = cur.fetchone()
+
+            if verified is None or verified[0] != SCHEMA_VERSION:
+                found = None if verified is None else verified[0]
                 raise RuntimeError(
                     f"unsupported Ruhusa PostgreSQL schema version {found!r}; "
                     f"expected {SCHEMA_VERSION}"
