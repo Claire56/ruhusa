@@ -12,6 +12,7 @@ from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from .audit import AuditEvent, _redact
 from .execution import (
     ExecutionClaimResult,
     ExecutionPermit,
@@ -20,7 +21,6 @@ from .execution import (
     ExecutionState,
 )
 from .invocations import InvocationRecord
-from .audit import AuditEvent, _redact
 from .models import (
     AuthorizationDecision,
     AuthorizationRequest,
@@ -215,9 +215,7 @@ def initialize_postgres_schema(pool: ConnectionPool) -> None:
                 (SCHEMA_VERSION,),
             )
 
-            cur.execute(
-                "SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE"
-            )
+            cur.execute("SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE")
             row = cur.fetchone()
 
             if row is None or row[0] != SCHEMA_VERSION:
@@ -643,9 +641,7 @@ class PostgresInvocationStore:
                         ),
                     )
         except UniqueViolation as exc:
-            raise ValueError(
-                f"invocation {record.invocation_id!r} is already registered"
-            ) from exc
+            raise ValueError(f"invocation {record.invocation_id!r} is already registered") from exc
 
         return record
 
@@ -856,18 +852,14 @@ class PostgresExecutionStore:
                 row = cur.fetchone()
 
                 if row is None:
-                    raise RuntimeError(
-                        "execution lifecycle row disappeared during claim"
-                    )
+                    raise RuntimeError("execution lifecycle row disappeared during claim")
 
                 record = _execution_from_row(row)
 
                 if _as_utc(record.expires_at) != canonical_expiry:
                     return ExecutionClaimResult(
                         allowed=False,
-                        reason=(
-                            "execution lifecycle expiry does not match canonical invocation"
-                        ),
+                        reason=("execution lifecycle expiry does not match canonical invocation"),
                         record=record,
                     )
 
@@ -909,9 +901,7 @@ class PostgresExecutionStore:
                 updated_row = cur.fetchone()
 
                 if updated_row is None:
-                    raise RuntimeError(
-                        "execution lifecycle claim update returned no row"
-                    )
+                    raise RuntimeError("execution lifecycle claim update returned no row")
 
         updated = _execution_from_row(updated_row)
 
@@ -1280,8 +1270,7 @@ class PostgresAuditLog:
 
                 if event_count != last_sequence or maximum_sequence != last_sequence:
                     raise RuntimeError(
-                        "PostgreSQL audit chain head is inconsistent "
-                        "with persisted events"
+                        "PostgreSQL audit chain head is inconsistent with persisted events"
                     )
 
                 if last_sequence == 0:
@@ -1382,9 +1371,7 @@ class PostgresAuditLog:
                 )
 
                 if cur.fetchone() is None:
-                    raise RuntimeError(
-                        "PostgreSQL audit chain head changed during append"
-                    )
+                    raise RuntimeError("PostgreSQL audit chain head changed during append")
 
         return audit_id
 

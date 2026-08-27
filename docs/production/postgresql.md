@@ -38,9 +38,7 @@ from ruhusa.postgres import (
     initialize_postgres_schema,
 )
 
-pool = create_postgres_pool(
-    "postgresql://user:password@localhost/ruhusa"
-)
+pool = create_postgres_pool("postgresql://user:password@localhost/ruhusa")
 
 initialize_postgres_schema(pool)
 
