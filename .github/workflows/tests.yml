@@ -35,6 +35,27 @@ jobs:
       - name: Build package
         run: uv build
 
+      - name: Smoke test base wheel
+        run: |
+          WHEEL="$(realpath "$(find dist -name 'ruhusa-*.whl' -print -quit)")"
+
+          uv venv --python 3.12 /tmp/ruhusa-base
+
+          uv pip install \
+            --python /tmp/ruhusa-base/bin/python \
+            "$WHEEL"
+
+          /tmp/ruhusa-base/bin/python - <<'PY'
+          import importlib.util
+          from importlib.metadata import version
+
+          import ruhusa
+
+          assert ruhusa.Ruhusa is not None
+          assert version("ruhusa") == "0.7.0rc1"
+          assert importlib.util.find_spec("psycopg") is None
+          PY
+
   postgres:
     runs-on: ubuntu-latest
 
@@ -78,3 +99,38 @@ jobs:
           tests/test_postgres_stores.py
           tests/test_postgres_execution_store.py
           tests/test_postgres_audit.py
+          tests/test_postgres_schema_compatibility.py
+
+      - name: Build package
+        run: uv build
+
+      - name: Smoke test PostgreSQL wheel extra
+        run: |
+          WHEEL="$(realpath "$(find dist -name 'ruhusa-*.whl' -print -quit)")"
+
+          uv venv --python 3.12 /tmp/ruhusa-postgres
+
+          uv pip install \
+            --python /tmp/ruhusa-postgres/bin/python \
+            "ruhusa[postgres] @ file://${WHEEL}"
+
+          /tmp/ruhusa-postgres/bin/python - <<'PY'
+          import psycopg
+
+          from ruhusa.postgres import (
+              PostgresAuditLog,
+              PostgresExecutionStore,
+              PostgresGrantStore,
+              PostgresInvocationStore,
+              PostgresRevocationStore,
+              PostgresToolRegistry,
+          )
+
+          assert psycopg is not None
+          assert PostgresGrantStore is not None
+          assert PostgresRevocationStore is not None
+          assert PostgresInvocationStore is not None
+          assert PostgresToolRegistry is not None
+          assert PostgresExecutionStore is not None
+          assert PostgresAuditLog is not None
+          PY
