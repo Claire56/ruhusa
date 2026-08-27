@@ -4,7 +4,7 @@ All notable changes to Ruhusa are documented here.
 
 Ruhusa follows semantic versioning while the public API remains pre-1.0.
 
-## [0.7.0rc1] - 2026-08-27
+## [0.7.0] - 2026-08-27
 
 ### Added
 
