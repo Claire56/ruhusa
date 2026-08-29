@@ -27,7 +27,11 @@ from .models import (
     DelegationGrant,
     Scope,
 )
-from .postgres_migrations import acquire_migration_lock, run_migrations
+from .postgres_migrations import (
+    acquire_migration_lock,
+    run_migrations,
+    validate_migration_history,
+)
 from .revocation import RevocationRecord
 from .tools import ToolRegistration
 
@@ -179,9 +183,10 @@ _SCHEMA_STATEMENTS = (
     CREATE TABLE IF NOT EXISTS ruhusa_schema_migrations (
         migration_id BIGSERIAL PRIMARY KEY,
         version_from INTEGER NOT NULL,
-        version_to INTEGER NOT NULL,
+        version_to INTEGER NOT NULL UNIQUE,
         checksum TEXT NOT NULL,
-        applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (version_to = version_from + 1)
     )
     """,
 )
@@ -220,20 +225,24 @@ def initialize_postgres_schema(pool: ConnectionPool) -> None:
     RuntimeError without touching any application table.
 
     Concurrent callers are serialized by a PostgreSQL transaction-scoped
-    advisory lock so that only one process executes DDL at a time.
+    advisory lock acquired before any application DDL is attempted. Every
+    startup validates stored migration checksums so that a tampered history
+    row is detected before authorization traffic is served.
     """
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            # Create the metadata table first — the only DDL we execute
-            # before reading the current schema version and acquiring the
-            # migration lock.
-            cur.execute(_SCHEMA_METADATA_STATEMENT)
-
-            # Serialize concurrent initializers at the database level.
+            # Acquire the advisory lock first — before any application DDL —
+            # so concurrent fresh initializers are serialized from the start.
+            # The lock is released automatically when the transaction ends.
             acquire_migration_lock(cur)
 
-            # Re-read after acquiring the lock so we see the definitive
-            # version written by any initializer that held the lock before us.
+            # Create the metadata table under the lock. CREATE TABLE IF NOT
+            # EXISTS is safe when two callers race: one creates it and the
+            # other observes it already present.
+            cur.execute(_SCHEMA_METADATA_STATEMENT)
+
+            # Read the current schema version under the lock so we see the
+            # definitive version written by any initializer that preceded us.
             cur.execute(
                 """
                 SELECT version
@@ -285,6 +294,10 @@ def initialize_postgres_schema(pool: ConnectionPool) -> None:
                     """,
                     (SCHEMA_VERSION,),
                 )
+
+            # Verify stored migration checksums on every startup so that a
+            # tampered history row is detected before the process proceeds.
+            validate_migration_history(cur)
 
             # Re-read after all DDL to confirm the version is correct.
             # Concurrent initializers may have raced on an empty database;
