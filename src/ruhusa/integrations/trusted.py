@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -87,8 +88,8 @@ class TrustedInvocationFactory:
         if invocation_expiry > task_expiry:
             raise ValueError("invocation expiry must not exceed task expiry")
 
-        canonical_arguments = dict(arguments)
-        canonical_context = dict(context or {})
+        canonical_arguments = deepcopy(dict(arguments))
+        canonical_context = deepcopy(dict(context or {}))
         canonical_chain = tuple(delegation_chain)
 
         canonical_id = invocation_id or uuid4().hex
