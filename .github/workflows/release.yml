@@ -2,6 +2,13 @@ name: Publish Python package
 
 on:
   workflow_dispatch:
+    inputs:
+      release_ref:
+        description: "Git tag to publish"
+        required: true
+        default: "v0.7.0"
+        type: string
+
   release:
     types: [published]
 
@@ -14,8 +21,10 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout repository
+      - name: Checkout release
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_ref }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -24,6 +33,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Verify package version
+        run: |
+          EXPECTED="${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_ref }}"
+          EXPECTED="${EXPECTED#v}"
+          ACTUAL=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "Release version: $EXPECTED"
+          echo "Package version: $ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
 
       - name: Build distributions
         run: uv build
@@ -39,6 +57,7 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
+          if-no-files-found: error
 
   publish:
     name: Publish to PyPI
