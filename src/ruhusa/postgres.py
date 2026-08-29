@@ -27,10 +27,15 @@ from .models import (
     DelegationGrant,
     Scope,
 )
+from .postgres_migrations import (
+    acquire_migration_lock,
+    run_migrations,
+    validate_migration_history,
+)
 from .revocation import RevocationRecord
 from .tools import ToolRegistration
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_METADATA_STATEMENT = """
 CREATE TABLE IF NOT EXISTS ruhusa_schema_metadata (
@@ -174,6 +179,16 @@ _SCHEMA_STATEMENTS = (
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_schema_migrations (
+        migration_id BIGSERIAL PRIMARY KEY,
+        version_from INTEGER NOT NULL,
+        version_to INTEGER NOT NULL UNIQUE,
+        checksum TEXT NOT NULL,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (version_to = version_from + 1)
+    )
+    """,
 )
 
 
@@ -201,17 +216,33 @@ def create_postgres_pool(
 
 
 def initialize_postgres_schema(pool: ConnectionPool) -> None:
-    """Initialize or validate the Ruhusa PostgreSQL schema.
+    """Initialize or migrate the Ruhusa PostgreSQL schema.
 
-    Schema version compatibility is checked before Ruhusa executes
-    application-table DDL against an already-versioned database.
+    On a fresh database this creates all application tables at the current
+    schema version. On a database at an earlier supported version this runs
+    the applicable migration steps inside the same transaction and advances
+    the version. On a database at a future unsupported version this raises
+    RuntimeError without touching any application table.
+
+    Concurrent callers are serialized by a PostgreSQL transaction-scoped
+    advisory lock acquired before any application DDL is attempted. Every
+    startup validates stored migration checksums so that a tampered history
+    row is detected before authorization traffic is served.
     """
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            # The metadata table is the only object we may create before
-            # determining compatibility.
+            # Acquire the advisory lock first — before any application DDL —
+            # so concurrent fresh initializers are serialized from the start.
+            # The lock is released automatically when the transaction ends.
+            acquire_migration_lock(cur)
+
+            # Create the metadata table under the lock. CREATE TABLE IF NOT
+            # EXISTS is safe when two callers race: one creates it and the
+            # other observes it already present.
             cur.execute(_SCHEMA_METADATA_STATEMENT)
 
+            # Read the current schema version under the lock so we see the
+            # definitive version written by any initializer that preceded us.
             cur.execute(
                 """
                 SELECT version
@@ -221,18 +252,36 @@ def initialize_postgres_schema(pool: ConnectionPool) -> None:
             )
             row = cur.fetchone()
 
-            # An already-versioned incompatible database must be rejected
-            # before application-table DDL is attempted.
-            if row is not None and row[0] != SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"unsupported Ruhusa PostgreSQL schema version {row[0]!r}; "
-                    f"expected {SCHEMA_VERSION}"
-                )
+            if row is not None:
+                current_version = row[0]
 
+                # A schema version newer than ours cannot be migrated down.
+                if current_version > SCHEMA_VERSION:
+                    raise RuntimeError(
+                        f"unsupported Ruhusa PostgreSQL schema version "
+                        f"{current_version!r}; expected {SCHEMA_VERSION}"
+                    )
+
+                # Migrate forward from an older supported version.
+                if current_version < SCHEMA_VERSION:
+                    run_migrations(cur, current_version, SCHEMA_VERSION)
+                    cur.execute(
+                        """
+                        UPDATE ruhusa_schema_metadata
+                        SET version = %s,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE singleton = TRUE
+                        """,
+                        (SCHEMA_VERSION,),
+                    )
+
+            # Idempotent DDL for all application tables. On a fresh database
+            # this creates everything. On an existing database the IF NOT
+            # EXISTS guards make each statement a no-op.
             for statement in _SCHEMA_STATEMENTS:
                 cur.execute(statement)
 
-            # Fresh/unversioned database: establish schema version 1.
+            # Fresh/unversioned database: record the initial schema version.
             if row is None:
                 cur.execute(
                     """
@@ -246,8 +295,13 @@ def initialize_postgres_schema(pool: ConnectionPool) -> None:
                     (SCHEMA_VERSION,),
                 )
 
-            # Re-read because concurrent initializers may have raced on a
-            # previously empty database.
+            # Verify stored migration checksums on every startup so that a
+            # tampered history row is detected before the process proceeds.
+            validate_migration_history(cur)
+
+            # Re-read after all DDL to confirm the version is correct.
+            # Concurrent initializers may have raced on an empty database;
+            # the ON CONFLICT DO NOTHING above is safe either way.
             cur.execute(
                 """
                 SELECT version

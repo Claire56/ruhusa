@@ -28,6 +28,7 @@ RUHUSA_TABLES = (
     "ruhusa_invocations",
     "ruhusa_revocations",
     "ruhusa_grants",
+    "ruhusa_schema_migrations",
     "ruhusa_schema_metadata",
 )
 
