@@ -286,7 +286,7 @@ def _insert_audit_event_v1(pool) -> None:
     Computes the event_hash using the same algorithm as PostgresAuditLog.append
     so that verify_chain() will pass after migration. The chain head row is
     assumed to already exist at (last_sequence=0, last_hash='GENESIS') from the
-    INSERT statement included in _SCHEMA_STATEMENTS.
+    INSERT statement included in _V1_SCHEMA_STATEMENTS.
     """
     audit_id = "audit-v1-preservation"
     timestamp = "2026-01-01T00:00:00+00:00"
@@ -450,7 +450,7 @@ def _setup_v1_schema(pool) -> None:
 
     # One audit event with a valid hash chain. This is inserted after the main
     # connection block so that the audit chain head row (written by the
-    # _SCHEMA_STATEMENTS INSERT) is visible in a fresh transaction.
+    # _V1_SCHEMA_STATEMENTS INSERT) is visible in a fresh transaction.
     _insert_audit_event_v1(pool)
 
 
