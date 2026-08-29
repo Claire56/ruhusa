@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from ruhusa.invocations import compute_arguments_digest
 
 from ruhusa import InMemoryInvocationStore, Principal, TaskContext
 from ruhusa.integrations import TrustedInvocationFactory
-from ruhusa.invocations import compute_arguments_digest
 
 
 def _task(*, now: datetime) -> TaskContext:
@@ -209,3 +209,45 @@ def test_store_failure_propagates_without_returning_request() -> None:
             expires_at=now + timedelta(minutes=5),
             now=now,
         )
+
+
+def test_nested_arguments_are_snapshotted_before_registration() -> None:
+    now = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
+    factory = TrustedInvocationFactory(InMemoryInvocationStore())
+
+    arguments = {
+        "refund": {
+            "amount": 25,
+            "items": ["item-1"],
+        }
+    }
+
+    prepared = factory.create(
+        invoking_principal_id="gateway",
+        executing_principal=Principal("agent-1"),
+        task=_task(now=now),
+        action="refund",
+        resource="account/1",
+        arguments=arguments,
+        expires_at=now + timedelta(minutes=5),
+        now=now,
+    )
+
+    arguments["refund"]["amount"] = 999
+    arguments["refund"]["items"].append("item-2")
+
+    assert prepared.request.arguments == {
+        "refund": {
+            "amount": 25,
+            "items": ["item-1"],
+        }
+    }
+
+    assert prepared.record.arguments_digest == compute_arguments_digest(
+        {
+            "refund": {
+                "amount": 25,
+                "items": ["item-1"],
+            }
+        }
+    )
