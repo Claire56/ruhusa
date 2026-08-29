@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import json
 import os
 
 import pytest
@@ -9,17 +10,19 @@ import pytest
 pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 
-from ruhusa.postgres import (  # noqa: E402
-    _SCHEMA_STATEMENTS,
-    SCHEMA_VERSION,
-    create_postgres_pool,
-    initialize_postgres_schema,
-)
 from ruhusa.postgres_migrations import (  # noqa: E402
     _ADVISORY_LOCK_KEY,
     _CHECKSUM_V1_TO_V2,
     _MIGRATION_STEPS,
     _MIGRATION_V1_TO_V2,
+)
+
+from ruhusa.postgres import (  # noqa: E402
+    _SCHEMA_STATEMENTS,
+    SCHEMA_VERSION,
+    PostgresAuditLog,
+    create_postgres_pool,
+    initialize_postgres_schema,
 )
 
 TEST_DSN = os.getenv("RUHUSA_TEST_POSTGRES_DSN")
@@ -77,11 +80,22 @@ _ALL_TABLES = (
 @pytest.fixture
 def pool():
     assert TEST_DSN is not None
-    p = create_postgres_pool(TEST_DSN, min_size=1, max_size=20)
+
+    p = create_postgres_pool(
+        TEST_DSN,
+        min_size=1,
+        max_size=20,
+    )
+
+    _drop_all(p)
+
     try:
         yield p
     finally:
-        p.close()
+        try:
+            _drop_all(p)
+        finally:
+            p.close()
 
 
 def _drop_all(pool) -> None:
@@ -123,12 +137,84 @@ def _migration_rows(pool) -> list[tuple[int, int, str]]:
             return cur.fetchall()
 
 
+def _insert_audit_event_v1(pool) -> None:
+    """Insert one valid audit event into a v1-era audit chain.
+
+    Computes the event_hash using the same algorithm as PostgresAuditLog.append
+    so that verify_chain() will pass after migration. The chain head row is
+    assumed to already exist at (last_sequence=0, last_hash='GENESIS') from the
+    INSERT statement included in _SCHEMA_STATEMENTS.
+    """
+    audit_id = "audit-v1-preservation"
+    timestamp = "2026-01-01T00:00:00+00:00"
+    payload = {
+        "audit_id": audit_id,
+        "timestamp": timestamp,
+        "principal_id": "agent-1",
+        "task_id": "task-v1",
+        "action": "read",
+        "resource": "resource/foo",
+        "arguments": {},
+        "effect": "allow",
+        "reason": "v1 test event",
+        "policy_id": "grant-v1-preservation",
+        "previous_hash": "GENESIS",
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    event_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ruhusa_audit_events (
+                    sequence, audit_id, timestamp,
+                    principal_id, task_id, action, resource,
+                    arguments, effect, reason, policy_id,
+                    previous_hash, event_hash
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                """,
+                (
+                    1,
+                    audit_id,
+                    timestamp,
+                    "agent-1",
+                    "task-v1",
+                    "read",
+                    "resource/foo",
+                    "{}",
+                    "allow",
+                    "v1 test event",
+                    "grant-v1-preservation",
+                    "GENESIS",
+                    event_hash,
+                ),
+            )
+            cur.execute(
+                """
+                UPDATE ruhusa_audit_chain
+                SET last_sequence = 1,
+                    last_hash = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE singleton = TRUE
+                """,
+                (event_hash,),
+            )
+
+
 def _setup_v1_schema(pool) -> None:
     """Create a complete v1-era schema with one row in every security table.
 
     v1 has no ruhusa_schema_migrations. One representative row per security
-    category (grant, revocation, invocation, tool, execution) is inserted so
-    that state-preservation tests exercise all durable security tables.
+    category (grant, revocation, invocation, tool, execution, audit event)
+    is inserted so that state-preservation tests exercise all durable security
+    tables.
+
+    TODO (v0.8-RC): replace the DDL here with a frozen snapshot of the v0.7
+    schema rather than filtering the current _SCHEMA_STATEMENTS. Using the
+    live DDL means a future addition to _SCHEMA_STATEMENTS could silently make
+    the "v1" fixture include schema objects that did not exist in v0.7.
     """
     _drop_all(pool)
     with pool.connection() as conn:
@@ -223,6 +309,11 @@ def _setup_v1_schema(pool) -> None:
                 """,
                 ("inv-v1-preservation",),
             )
+
+    # One audit event with a valid hash chain. This is inserted after the main
+    # connection block so that the audit chain head row (written by the
+    # _SCHEMA_STATEMENTS INSERT) is visible in a fresh transaction.
+    _insert_audit_event_v1(pool)
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +420,13 @@ def test_migration_from_v1_is_idempotent(pool) -> None:
 
 
 def test_migration_preserves_all_security_state(pool) -> None:
-    """Every v1 security record must survive the v1→v2 migration unchanged."""
+    """Every v1 security record must survive the v1→v2 migration unchanged.
+
+    Verifies that grants, revocations, invocations, tool registrations,
+    executions, and the audit event chain all survive the v1→v2 migration
+    intact. The audit chain is verified end-to-end via PostgresAuditLog so
+    that any corruption of event_hash or chain linkage is caught.
+    """
     _setup_v1_schema(pool)
 
     initialize_postgres_schema(pool)
@@ -365,6 +462,17 @@ def test_migration_preserves_all_security_state(pool) -> None:
                 ("inv-v1-preservation",),
             )
             assert cur.fetchone() is not None, "execution record lost after migration"
+
+            cur.execute(
+                "SELECT audit_id FROM ruhusa_audit_events WHERE audit_id = %s",
+                ("audit-v1-preservation",),
+            )
+            assert cur.fetchone() is not None, "audit event lost after migration"
+
+    # Verify the hash chain is intact end-to-end after migration.
+    assert PostgresAuditLog(pool).verify_chain() is True, (
+        "audit chain integrity failed after v1→v2 migration"
+    )
 
 
 def test_migration_rollback_preserves_version(pool, monkeypatch) -> None:

@@ -106,15 +106,23 @@ def run_migrations(cur: Cursor, from_version: int, to_version: int) -> None:
 
 
 def validate_migration_history(cur: Cursor) -> None:
-    """Verify that every stored migration checksum matches its expected value.
+    """Validate migration checksum integrity for every present history row.
 
-    Called on every startup once the schema is at SCHEMA_VERSION so that a
-    tampered migration history row is detected before the process serves any
-    authorization traffic.
+    Reads each row from ruhusa_schema_migrations and verifies its stored
+    checksum against the expected value from _MIGRATION_STEPS. This detects
+    modification of a stored checksum or a stored SQL body that no longer
+    matches a known migration step.
 
-    Raises RuntimeError if any row in ruhusa_schema_migrations records a step
-    that is not in the migration registry, or a checksum that does not match
-    the expected value for that step.
+    Scope and limitations: this function validates the checksums of rows that
+    are present. It cannot detect the deletion of a history row — a fresh
+    schema-v2 installation intentionally has zero rows, so an empty table is
+    not distinguishable from one that had rows removed. The Ruhusa audit-event
+    chain (ruhusa_audit_events + ruhusa_audit_chain) is the tamper-evident
+    record for authorization decisions; the migration history table provides
+    migration checksum integrity, not broader tamper-evidence.
+
+    Raises RuntimeError if any present row records a step that is not in the
+    migration registry, or a checksum that does not match the expected value.
     """
     cur.execute(
         """
