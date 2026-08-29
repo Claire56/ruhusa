@@ -10,19 +10,17 @@ import pytest
 pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 
+from ruhusa.postgres import (  # noqa: E402
+    SCHEMA_VERSION,
+    PostgresAuditLog,
+    create_postgres_pool,
+    initialize_postgres_schema,
+)
 from ruhusa.postgres_migrations import (  # noqa: E402
     _ADVISORY_LOCK_KEY,
     _CHECKSUM_V1_TO_V2,
     _MIGRATION_STEPS,
     _MIGRATION_V1_TO_V2,
-)
-
-from ruhusa.postgres import (  # noqa: E402
-    _SCHEMA_STATEMENTS,
-    SCHEMA_VERSION,
-    PostgresAuditLog,
-    create_postgres_pool,
-    initialize_postgres_schema,
 )
 
 TEST_DSN = os.getenv("RUHUSA_TEST_POSTGRES_DSN")
@@ -63,6 +61,151 @@ def test_advisory_lock_key_is_stable() -> None:
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Frozen v0.7 (schema version 1) DDL snapshot — must never be modified.
+#
+# A literal copy of the application tables that existed in Ruhusa 0.7.
+# Using a snapshot rather than filtering the live _SCHEMA_STATEMENTS ensures
+# that future additions to _SCHEMA_STATEMENTS cannot silently alter the v1
+# migration-test fixture.
+# ---------------------------------------------------------------------------
+
+_V1_SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_grants (
+        grant_id TEXT PRIMARY KEY,
+        grantor_id TEXT NOT NULL,
+        grantee_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        actions JSONB NOT NULL,
+        resource_prefixes JSONB NOT NULL,
+        max_numeric_arguments JSONB NOT NULL,
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_revocations (
+        grant_id TEXT PRIMARY KEY,
+        revoked_at TIMESTAMPTZ NOT NULL,
+        reason TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_invocations (
+        invocation_id TEXT PRIMARY KEY,
+        invoking_principal_id TEXT NOT NULL,
+        executing_principal_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        resource TEXT NOT NULL,
+        arguments_digest TEXT NOT NULL,
+        tool_id TEXT,
+        implementation_id TEXT,
+        recorded_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_tools (
+        tool_id TEXT NOT NULL,
+        implementation_id TEXT NOT NULL,
+        allowed_actions JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (tool_id, implementation_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_audit_chain (
+        singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+        last_sequence BIGINT NOT NULL DEFAULT 0
+            CHECK (last_sequence >= 0),
+        last_hash TEXT NOT NULL DEFAULT 'GENESIS',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_audit_events (
+        sequence BIGINT PRIMARY KEY
+            CHECK (sequence > 0),
+        audit_id TEXT NOT NULL UNIQUE,
+        timestamp TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        resource TEXT NOT NULL,
+        arguments JSONB NOT NULL,
+        effect TEXT NOT NULL
+            CHECK (
+                effect IN (
+                    'allow',
+                    'deny',
+                    'require_approval'
+                )
+            ),
+        reason TEXT NOT NULL,
+        policy_id TEXT,
+        previous_hash TEXT NOT NULL,
+        event_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    INSERT INTO ruhusa_audit_chain (
+        singleton,
+        last_sequence,
+        last_hash
+    )
+    VALUES (
+        TRUE,
+        0,
+        'GENESIS'
+    )
+    ON CONFLICT (singleton) DO NOTHING
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ruhusa_executions (
+        invocation_id TEXT PRIMARY KEY,
+        expires_at TIMESTAMPTZ NOT NULL,
+        state TEXT NOT NULL DEFAULT 'available'
+            CHECK (
+                state IN (
+                    'available',
+                    'claimed',
+                    'completed',
+                    'unknown',
+                    'cancelled'
+                )
+            ),
+        attempt_count INTEGER NOT NULL DEFAULT 0
+            CHECK (attempt_count >= 0),
+        claim_id TEXT,
+        claimed_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        released_at TIMESTAMPTZ,
+        unknown_at TIMESTAMPTZ,
+        cancelled_at TIMESTAMPTZ,
+        cancel_reason TEXT,
+        recovered_at TIMESTAMPTZ,
+        recovery_outcome TEXT
+            CHECK (
+                recovery_outcome IS NULL
+                OR recovery_outcome IN (
+                    'side_effect_confirmed',
+                    'side_effect_not_applied'
+                )
+            ),
+        recovery_reason TEXT,
+        recovery_count INTEGER NOT NULL DEFAULT 0
+            CHECK (recovery_count >= 0),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+)
 
 _ALL_TABLES = (
     "ruhusa_audit_events",
@@ -209,12 +352,9 @@ def _setup_v1_schema(pool) -> None:
     v1 has no ruhusa_schema_migrations. One representative row per security
     category (grant, revocation, invocation, tool, execution, audit event)
     is inserted so that state-preservation tests exercise all durable security
-    tables.
-
-    TODO (v0.8-RC): replace the DDL here with a frozen snapshot of the v0.7
-    schema rather than filtering the current _SCHEMA_STATEMENTS. Using the
-    live DDL means a future addition to _SCHEMA_STATEMENTS could silently make
-    the "v1" fixture include schema objects that did not exist in v0.7.
+    tables. Application DDL is sourced from the frozen _V1_SCHEMA_STATEMENTS
+    snapshot so that future changes to _SCHEMA_STATEMENTS cannot silently
+    alter the v1 fixture.
     """
     _drop_all(pool)
     with pool.connection() as conn:
@@ -231,11 +371,9 @@ def _setup_v1_schema(pool) -> None:
             )
             cur.execute("INSERT INTO ruhusa_schema_metadata (singleton, version) VALUES (TRUE, 1)")
 
-            # All v1 application tables from the shared DDL, excluding the
-            # migrations table which did not exist in v1.
-            for statement in _SCHEMA_STATEMENTS:
-                if "ruhusa_schema_migrations" not in statement:
-                    cur.execute(statement)
+            # All v1 application tables from the frozen v0.7 DDL snapshot.
+            for statement in _V1_SCHEMA_STATEMENTS:
+                cur.execute(statement)
 
             # One grant
             cur.execute(
