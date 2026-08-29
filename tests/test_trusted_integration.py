@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from ruhusa.invocations import compute_arguments_digest
 
 from ruhusa import InMemoryInvocationStore, Principal, TaskContext
 from ruhusa.integrations import TrustedInvocationFactory
+from ruhusa.invocations import compute_arguments_digest
 
 
 def _task(*, now: datetime) -> TaskContext:
