@@ -1,0 +1,193 @@
+name: release-candidate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - v0.8.0-rc1-release-hardening
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-validation:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ruhusa_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ruhusa_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      RUHUSA_TEST_POSTGRES_DSN: >-
+        postgresql://postgres:postgres@localhost:5432/ruhusa_test
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Sync all supported extras
+        run: uv sync --locked --extra postgres --extra fastapi
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Run full test suite
+        run: uv run pytest
+
+      - name: Build release artifacts
+        run: uv build
+
+      - name: Verify artifact names
+        run: |
+          test -f dist/ruhusa-0.8.0.tar.gz
+          test -f dist/ruhusa-0.8.0-py3-none-any.whl
+
+      - name: Smoke test base wheel without optional dependencies
+        run: |
+          python3.12 -m venv /tmp/ruhusa-base
+          /tmp/ruhusa-base/bin/python -m pip install --upgrade pip
+          /tmp/ruhusa-base/bin/python -m pip install --no-deps dist/ruhusa-0.8.0-py3-none-any.whl
+          /tmp/ruhusa-base/bin/python - <<'PY'
+          import importlib.util
+          from importlib.metadata import version
+          import ruhusa
+
+          assert version("ruhusa") == "0.8.0"
+          assert importlib.util.find_spec("psycopg") is None
+          assert importlib.util.find_spec("fastapi") is None
+          for name in ruhusa.__all__:
+              assert getattr(ruhusa, name) is not None
+          PY
+          test "$(/tmp/ruhusa-base/bin/ruhusa version)" = "0.8.0"
+          /tmp/ruhusa-base/bin/ruhusa doctor --json | /tmp/ruhusa-base/bin/python -c 'import json,sys; p=json.load(sys.stdin); assert p["ruhusa"]=="0.8.0"; assert p["postgres_extra_available"] is False; assert p["fastapi_extra_available"] is False'
+
+      - name: Smoke test wheel with PostgreSQL and FastAPI extras
+        run: |
+          python3.12 -m venv /tmp/ruhusa-extras
+          /tmp/ruhusa-extras/bin/python -m pip install --upgrade pip
+          /tmp/ruhusa-extras/bin/python -m pip install 'dist/ruhusa-0.8.0-py3-none-any.whl[postgres,fastapi]'
+          /tmp/ruhusa-extras/bin/python - <<'PY'
+          from ruhusa.integrations.fastapi import FastAPITrustedInvocationAdapter
+          from ruhusa.postgres import PostgresExecutionStore
+
+          assert FastAPITrustedInvocationAdapter is not None
+          assert PostgresExecutionStore is not None
+          PY
+          /tmp/ruhusa-extras/bin/ruhusa doctor --json | /tmp/ruhusa-extras/bin/python -c 'import json,sys; p=json.load(sys.stdin); assert p["postgres_extra_available"] is True; assert p["fastapi_extra_available"] is True'
+
+  postgres-v07-upgrade:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ruhusa_upgrade
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ruhusa_upgrade"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      UPGRADE_DSN: >-
+        postgresql://postgres:postgres@localhost:5432/ruhusa_upgrade
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Create real v0.7.0 schema from PyPI
+        run: |
+          python3.12 -m venv /tmp/ruhusa-v7
+          /tmp/ruhusa-v7/bin/python -m pip install --upgrade pip
+          /tmp/ruhusa-v7/bin/python -m pip install 'ruhusa[postgres]==0.7.0'
+          /tmp/ruhusa-v7/bin/python - <<'PY'
+          import os
+          from ruhusa.postgres import create_postgres_pool, initialize_postgres_schema
+
+          pool = create_postgres_pool(os.environ["UPGRADE_DSN"], min_size=1, max_size=2)
+          initialize_postgres_schema(pool)
+          with pool.connection() as conn:
+              with conn.cursor() as cur:
+                  cur.execute(
+                      "SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE"
+                  )
+                  row = cur.fetchone()
+                  assert row == (1,), row
+          pool.close()
+          PY
+
+      - name: Build v0.8.0 wheel
+        run: uv build
+
+      - name: Upgrade the real v0.7.0 database with v0.8.0
+        run: |
+          python3.12 -m venv /tmp/ruhusa-v8
+          /tmp/ruhusa-v8/bin/python -m pip install --upgrade pip
+          /tmp/ruhusa-v8/bin/python -m pip install 'dist/ruhusa-0.8.0-py3-none-any.whl[postgres]'
+          /tmp/ruhusa-v8/bin/python - <<'PY'
+          import os
+          from ruhusa.postgres import create_postgres_pool, initialize_postgres_schema
+
+          pool = create_postgres_pool(os.environ["UPGRADE_DSN"], min_size=1, max_size=2)
+          initialize_postgres_schema(pool)
+
+          with pool.connection() as conn:
+              with conn.cursor() as cur:
+                  cur.execute(
+                      "SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE"
+                  )
+                  assert cur.fetchone() == (2,)
+
+                  cur.execute(
+                      """
+                      SELECT version_from, version_to
+                      FROM ruhusa_schema_migrations
+                      ORDER BY migration_id
+                      """
+                  )
+                  assert cur.fetchall() == [(1, 2)]
+
+          pool.close()
+          PY
+
+      - name: Verify upgraded database through installed CLI
+        run: |
+          RUHUSA_POSTGRES_DSN="$UPGRADE_DSN" /tmp/ruhusa-v8/bin/ruhusa postgres health --json > /tmp/health.json
+          /tmp/ruhusa-v8/bin/python -c 'import json; p=json.load(open("/tmp/health.json")); assert p["ok"] is True; assert p["healthy"] is True'

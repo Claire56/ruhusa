@@ -1,141 +1,81 @@
-name: Publish release
+name: Publish Python package
 
 on:
-  release:
-    types:
-      - published
   workflow_dispatch:
     inputs:
       release_ref:
-        description: "Exact release tag to publish"
+        description: "Git tag to publish"
         required: true
-        default: "v0.8.0"
+        default: "v0.7.0"
         type: string
 
-permissions:
-  contents: read
+  release:
+    types: [published]
 
 jobs:
   build:
-    name: Build release artifacts
+    name: Build release distributions
     runs-on: ubuntu-latest
 
-    outputs:
-      release_ref: ${{ steps.release_ref.outputs.release_ref }}
-      package_version: ${{ steps.version.outputs.package_version }}
+    permissions:
+      contents: read
 
     steps:
-      - name: Resolve release ref
-        id: release_ref
-        shell: bash
-        env:
-          MANUAL_REF: ${{ inputs.release_ref }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            release_ref="${MANUAL_REF}"
-          else
-            release_ref="${RELEASE_TAG}"
-          fi
-
-          if [[ -z "${release_ref}" ]]; then
-            echo "Release ref is empty."
-            exit 1
-          fi
-
-          if [[ "${release_ref}" != v* ]]; then
-            echo "Release ref must be a version tag beginning with 'v'."
-            exit 1
-          fi
-
-          echo "release_ref=${release_ref}" >> "${GITHUB_OUTPUT}"
-
-      - name: Check out exact release tag
+      - name: Checkout release
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.release_ref.outputs.release_ref }}
-          fetch-depth: 0
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_ref }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          enable-cache: true
+          python-version: "3.12"
 
-      - name: Install Python
-        run: uv python install 3.12
-
-      - name: Verify package version matches tag
-        id: version
-        shell: bash
-        env:
-          RELEASE_REF: ${{ steps.release_ref.outputs.release_ref }}
+      - name: Verify package version
         run: |
-          package_version="$(
-            python3 - <<'PY'
-          import tomllib
+          EXPECTED="${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_ref }}"
+          EXPECTED="${EXPECTED#v}"
+          ACTUAL=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "Release version: $EXPECTED"
+          echo "Package version: $ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
 
-          with open("pyproject.toml", "rb") as f:
-              data = tomllib.load(f)
-
-          print(data["project"]["version"])
-          PY
-          )"
-
-          tag_version="${RELEASE_REF#v}"
-
-          echo "Package version: ${package_version}"
-          echo "Tag version:     ${tag_version}"
-
-          if [[ "${package_version}" != "${tag_version}" ]]; then
-            echo "Package version does not match release tag."
-            exit 1
-          fi
-
-          echo "package_version=${package_version}" >> "${GITHUB_OUTPUT}"
-
-      - name: Build package
+      - name: Build distributions
         run: uv build
 
-      - name: Verify expected artifacts
-        shell: bash
-        env:
-          PACKAGE_VERSION: ${{ steps.version.outputs.package_version }}
+      - name: Verify release artifacts
         run: |
-          test -f "dist/ruhusa-${PACKAGE_VERSION}.tar.gz"
-          test -f "dist/ruhusa-${PACKAGE_VERSION}-py3-none-any.whl"
+          python -m pip install --upgrade twine
+          python -m twine check dist/*
+          ls -lah dist
 
-      - name: Check package metadata
-        run: uvx twine check dist/*
-
-      - name: Upload release artifacts
+      - name: Upload release distributions
         uses: actions/upload-artifact@v4
         with:
           name: python-package-distributions
           path: dist/
           if-no-files-found: error
-          retention-days: 7
 
   publish:
     name: Publish to PyPI
-    needs:
-      - build
-
+    needs: build
     runs-on: ubuntu-latest
 
     environment:
       name: pypi
-      url: https://pypi.org/project/ruhusa/${{ needs.build.outputs.package_version }}/
 
     permissions:
-      contents: read
       id-token: write
 
     steps:
-      - name: Download release artifacts
+      - name: Download release distributions
         uses: actions/download-artifact@v4
         with:
           name: python-package-distributions
           path: dist/
 
-      - name: Publish package to PyPI
+      - name: Publish release distributions
         uses: pypa/gh-action-pypi-publish@release/v1
