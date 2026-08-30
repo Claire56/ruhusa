@@ -52,7 +52,7 @@ jobs:
           import ruhusa
 
           assert ruhusa.Ruhusa is not None
-          assert version("ruhusa") == "0.7.0"
+          assert version("ruhusa") == "0.8.0"
           assert importlib.util.find_spec("psycopg") is None
           PY
 
