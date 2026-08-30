@@ -1,0 +1,26 @@
+name: FastAPI integration
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fastapi:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Sync FastAPI extra
+        run: uv sync --locked --extra fastapi
+      - name: Run FastAPI integration tests
+        run: uv run pytest tests/test_fastapi_integration.py
+      - name: Build package
+        run: uv build
