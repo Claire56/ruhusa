@@ -7,6 +7,7 @@ import pytest
 pytest.importorskip("fastapi")
 
 from fastapi import Request  # noqa: E402
+
 from ruhusa import InMemoryInvocationStore, Principal, TaskContext  # noqa: E402
 from ruhusa.integrations import TrustedInvocationFactory  # noqa: E402
 from ruhusa.integrations.fastapi import (  # noqa: E402
