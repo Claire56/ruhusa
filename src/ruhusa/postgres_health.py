@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import psycopg.errors
 from psycopg_pool import ConnectionPool
 
 from .health import HealthRegistry
@@ -15,13 +16,16 @@ def postgres_connectivity_probe(pool: ConnectionPool) -> bool:
 
 
 def postgres_schema_probe(pool: ConnectionPool) -> bool:
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE")
-            row = cur.fetchone()
-            if row is None or int(row[0]) != SCHEMA_VERSION:
-                return False
-            validate_migration_history(cur)
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE")
+                row = cur.fetchone()
+                if row is None or int(row[0]) != SCHEMA_VERSION:
+                    return False
+                validate_migration_history(cur)
+    except psycopg.errors.UndefinedTable:
+        return False
     return True
 
 
