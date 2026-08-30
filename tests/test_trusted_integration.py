@@ -251,3 +251,37 @@ def test_nested_arguments_are_snapshotted_before_registration() -> None:
             }
         }
     )
+
+
+def test_nested_context_is_snapshotted_before_returning_request() -> None:
+    now = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
+    factory = TrustedInvocationFactory(InMemoryInvocationStore())
+
+    context = {
+        "environment": {
+            "risk_level": "low",
+            "tags": ["trusted"],
+        }
+    }
+
+    prepared = factory.create(
+        invoking_principal_id="gateway",
+        executing_principal=Principal("agent-1"),
+        task=_task(now=now),
+        action="read",
+        resource="customer/1",
+        arguments={},
+        context=context,
+        expires_at=now + timedelta(minutes=5),
+        now=now,
+    )
+
+    context["environment"]["risk_level"] = "high"
+    context["environment"]["tags"].append("modified")
+
+    assert prepared.request.context == {
+        "environment": {
+            "risk_level": "low",
+            "tags": ["trusted"],
+        }
+    }
