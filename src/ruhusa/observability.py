@@ -45,7 +45,10 @@ class TelemetryContext:
     correlation_id: str | None = None
 
     def __post_init__(self) -> None:
-        for name, value in (("trace_id", self.trace_id), ("correlation_id", self.correlation_id)):
+        for name, value in (
+            ("trace_id", self.trace_id),
+            ("correlation_id", self.correlation_id),
+        ):
             if value is not None and not value.strip():
                 raise ValueError(f"{name} must not be empty")
 
@@ -106,6 +109,13 @@ class InMemoryTelemetrySink:
             return tuple(self._events)
 
 
+class NoopTelemetrySink:
+    """Telemetry sink that silently discards all events."""
+
+    def emit(self, event: TelemetryEvent) -> None:
+        pass
+
+
 def _safe_emit(
     sink: TelemetrySink,
     name: TelemetryEventName,
@@ -113,7 +123,11 @@ def _safe_emit(
 ) -> None:
     context = current_telemetry_context()
     event = TelemetryEvent(
-        name, datetime.now(UTC), attributes or {}, context.trace_id, context.correlation_id
+        name,
+        datetime.now(UTC),
+        attributes or {},
+        context.trace_id,
+        context.correlation_id,
     )
     try:
         sink.emit(event)
@@ -138,7 +152,11 @@ class InstrumentedAuditLog:
         _safe_emit(
             self._sink,
             TelemetryEventName.AUTHORIZATION_DECISION,
-            {"effect": decision.effect.value, "allowed": decision.allowed, "audited": True},
+            {
+                "effect": decision.effect.value,
+                "allowed": decision.allowed,
+                "audited": True,
+            },
         )
         return audit_id
 
@@ -168,7 +186,9 @@ class InstrumentedExecutionStore:
         if extra:
             attrs.update(extra)
         _safe_emit(
-            self._sink, name if changed else TelemetryEventName.EXECUTION_TRANSITION_REJECTED, attrs
+            self._sink,
+            name if changed else TelemetryEventName.EXECUTION_TRANSITION_REJECTED,
+            attrs,
         )
 
     def get(self, invocation_id: str) -> ExecutionRecord | None:
@@ -248,7 +268,9 @@ class InstrumentedExecutionStore:
             self._failure("mark_stale_claim_unknown")
             raise
         self._transition(
-            TelemetryEventName.EXECUTION_STALE_UNKNOWN, "mark_stale_claim_unknown", changed
+            TelemetryEventName.EXECUTION_STALE_UNKNOWN,
+            "mark_stale_claim_unknown",
+            changed,
         )
         return changed
 

@@ -1,4 +1,5 @@
 from .audit import AuditEvent, InMemoryAuditLog
+from .config import RuntimeConfig
 from .core import Ruhusa
 from .errors import (
     ConfigurationError,
@@ -19,6 +20,12 @@ from .execution import (
     InMemoryExecutionStore,
 )
 from .grants import InMemoryGrantStore
+from .health import (
+    HealthCheckResult,
+    HealthRegistry,
+    HealthReport,
+    HealthStatus,
+)
 from .interfaces import (
     AuditLog,
     ExecutionStore,
@@ -28,7 +35,11 @@ from .interfaces import (
     RevocationStore,
     ToolRegistry,
 )
-from .invocations import InMemoryInvocationStore, InvocationRecord, compute_arguments_digest
+from .invocations import (
+    InMemoryInvocationStore,
+    InvocationRecord,
+    compute_arguments_digest,
+)
 from .models import (
     AuthorizationDecision,
     AuthorizationRequest,
@@ -38,8 +49,28 @@ from .models import (
     Scope,
     TaskContext,
 )
+from .observability import (
+    InMemoryTelemetrySink,
+    InstrumentedAuditLog,
+    InstrumentedExecutionStore,
+    NoopTelemetrySink,
+    TelemetryContext,
+    TelemetryEvent,
+    TelemetryEventName,
+    TelemetrySink,
+    current_telemetry_context,
+    telemetry_context,
+)
 from .policy import PolicyRule, StaticPolicyStore
 from .revocation import InMemoryRevocationStore, RevocationRecord
+from .runtime import (
+    LifecycleError,
+    ResourceClosedError,
+    RuhusaRuntime,
+    RuntimeState,
+    ShutdownError,
+    StartupError,
+)
 from .tools import InMemoryToolRegistry, ToolRegistration
 
 __all__ = [
@@ -59,29 +90,50 @@ __all__ = [
     "ExecutionState",
     "ExecutionStore",
     "GrantStore",
+    "HealthCheckResult",
+    "HealthRegistry",
+    "HealthReport",
+    "HealthStatus",
     "InMemoryAuditLog",
     "InMemoryExecutionStore",
     "InMemoryGrantStore",
     "InMemoryInvocationStore",
     "InMemoryRevocationStore",
+    "InMemoryTelemetrySink",
     "InMemoryToolRegistry",
+    "InstrumentedAuditLog",
+    "InstrumentedExecutionStore",
     "InvalidStateTransitionError",
     "InvocationRecord",
     "InvocationStore",
+    "LifecycleError",
+    "NoopTelemetrySink",
     "PolicyRule",
     "PolicyStore",
     "Principal",
     "ProvenanceError",
+    "ResourceClosedError",
     "RevocationRecord",
     "RevocationStore",
     "Ruhusa",
     "RuhusaError",
+    "RuhusaRuntime",
+    "RuntimeConfig",
+    "RuntimeState",
     "Scope",
+    "ShutdownError",
+    "StartupError",
     "StaticPolicyStore",
     "StoreError",
     "StoreUnavailableError",
     "TaskContext",
+    "TelemetryContext",
+    "TelemetryEvent",
+    "TelemetryEventName",
+    "TelemetrySink",
     "ToolRegistration",
     "ToolRegistry",
     "compute_arguments_digest",
+    "current_telemetry_context",
+    "telemetry_context",
 ]
