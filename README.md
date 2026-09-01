@@ -1,3 +1,5 @@
+![Ruhusa — Authorization for Agentic AI](https://raw.githubusercontent.com/Claire56/ruhusa/main/docs/assets/branding/ruhusa-logo.png)
+
 # Ruhusa
 
 **Continuous authorization for multi-agent AI systems.**
