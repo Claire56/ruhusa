@@ -10,6 +10,13 @@ Ruhusa means **permission** in Swahili.
 
 > **Authority should narrow as agents delegate—not expand.**
 
+## Table of Contents
+* [Overview](#Overview)
+* [Project Status](#Project-Status)
+* [Current Capabilities](#Current-Capabilities)
+* [Research Method](#Research-Method)
+* [Security Model](#Security-Model)
+
 ## Overview
 
 Ruhusa is an open-source authorization framework and research artifact for
