@@ -63,6 +63,9 @@ build-backend = "uv_build"
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+markers = [
+    "postgres: marks tests that require a live PostgreSQL connection (deselect with -m 'not postgres')",
+]
 
 [tool.ruff]
 target-version = "py312"
