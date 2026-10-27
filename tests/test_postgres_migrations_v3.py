@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
+pytest.importorskip("psycopg")
+
+
 from ruhusa.postgres_migrations import (
     _CHECKSUM_V1_TO_V2,
     _CHECKSUM_V2_TO_V3,
