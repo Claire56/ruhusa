@@ -22,6 +22,9 @@ def test_replay_is_deterministic() -> None:
 def test_observations_include_control_and_attack_families() -> None:
     observations = evaluate()["observations"]
     assert {row["family"] for row in observations} >= {
-        "control", "prompt_injection", "denial_replanning", "resource_substitution"
+        "control",
+        "prompt_injection",
+        "denial_replanning",
+        "resource_substitution",
     }
     assert all(row["correct"] for row in observations)
