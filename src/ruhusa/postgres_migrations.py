@@ -35,11 +35,24 @@ _MIGRATION_V1_TO_V2 = _MIGRATION_TABLE_DDL
 # not patching an existing one.
 _CHECKSUM_V1_TO_V2 = "48edbed3d9348b746c410ac89cc7a7d042f597a5871ad9810bfa6de0c1119e9f"
 
+# Current-schema DDL for durable approvals. Fresh schema creation imports this
+# statement, while an existing schema-v2 database reaches the same object via
+# the v2→v3 migration below. Keeping one canonical SQL body prevents fresh and
+# upgraded databases from drifting.
+APPROVAL_SCHEMA_DDL = "CREATE TABLE IF NOT EXISTS ruhusa_approvals (\n    approval_id TEXT PRIMARY KEY,\n    invocation_id TEXT NOT NULL\n        REFERENCES ruhusa_invocations(invocation_id)\n        ON DELETE RESTRICT,\n    task_id TEXT NOT NULL,\n    state TEXT NOT NULL DEFAULT 'pending'\n        CHECK (\n            state IN (\n                'pending',\n                'approved',\n                'consumed',\n                'rejected',\n                'revoked',\n                'expired'\n            )\n        ),\n    active_invocation_id TEXT\n        GENERATED ALWAYS AS (\n            CASE\n                WHEN state IN ('pending', 'approved') THEN invocation_id\n                ELSE NULL\n            END\n        ) STORED UNIQUE,\n    requested_at TIMESTAMPTZ NOT NULL,\n    expires_at TIMESTAMPTZ NOT NULL,\n    approved_by TEXT,\n    approved_at TIMESTAMPTZ,\n    rejected_by TEXT,\n    rejected_at TIMESTAMPTZ,\n    revoked_by TEXT,\n    revoked_at TIMESTAMPTZ,\n    consumed_at TIMESTAMPTZ,\n    consumed_claim_id TEXT,\n    consumed_attempt INTEGER\n        CHECK (consumed_attempt IS NULL OR consumed_attempt > 0),\n    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    CHECK (expires_at > requested_at),\n    CHECK (\n        state <> 'approved'\n        OR (\n            approved_by IS NOT NULL\n            AND approved_at IS NOT NULL\n        )\n    ),\n    CHECK (\n        state <> 'rejected'\n        OR (\n            rejected_by IS NOT NULL\n            AND rejected_at IS NOT NULL\n        )\n    ),\n    CHECK (\n        state <> 'revoked'\n        OR (\n            revoked_by IS NOT NULL\n            AND revoked_at IS NOT NULL\n        )\n    ),\n    CHECK (\n        state <> 'consumed'\n        OR (\n            approved_by IS NOT NULL\n            AND approved_at IS NOT NULL\n            AND consumed_at IS NOT NULL\n            AND consumed_claim_id IS NOT NULL\n            AND consumed_attempt IS NOT NULL\n        )\n    )\n)"
+
+# v2→v3 introduces durable, invocation-bound human approvals.
+_MIGRATION_V2_TO_V3 = APPROVAL_SCHEMA_DDL
+
+# Hardcoded SHA-256 of _MIGRATION_V2_TO_V3.
+_CHECKSUM_V2_TO_V3 = "be0a98f0642f61253c736d63261063c853a1bd998f0bac55ac470f0c210dc605"
+
 # Registry of available migration steps: (from_version, to_version) maps to
 # (sql, expected_checksum). Each step is atomic within the caller's
 # transaction.
 _MIGRATION_STEPS: dict[tuple[int, int], tuple[str, str]] = {
     (1, 2): (_MIGRATION_V1_TO_V2, _CHECKSUM_V1_TO_V2),
+    (2, 3): (_MIGRATION_V2_TO_V3, _CHECKSUM_V2_TO_V3),
 }
 
 
@@ -66,9 +79,6 @@ def run_migrations(cur: Cursor, from_version: int, to_version: int) -> None:
     The caller is responsible for holding the migration advisory lock and for
     updating ruhusa_schema_metadata.version after this function returns.
     """
-    # Bootstrap: create the history table as infrastructure so we can record
-    # migration steps into it. This is always CREATE TABLE IF NOT EXISTS and
-    # is safe to run even if the table already exists.
     cur.execute(_MIGRATION_TABLE_DDL)
 
     current = from_version
@@ -109,20 +119,11 @@ def validate_migration_history(cur: Cursor) -> None:
     """Validate migration checksum integrity for every present history row.
 
     Reads each row from ruhusa_schema_migrations and verifies its stored
-    checksum against the expected value from _MIGRATION_STEPS. This detects
-    modification of a stored checksum or a stored SQL body that no longer
-    matches a known migration step.
+    checksum against the expected value from _MIGRATION_STEPS.
 
-    Scope and limitations: this function validates the checksums of rows that
-    are present. It cannot detect the deletion of a history row — a fresh
-    schema-v2 installation intentionally has zero rows, so an empty table is
-    not distinguishable from one that had rows removed. The Ruhusa audit-event
-    chain (ruhusa_audit_events + ruhusa_audit_chain) is the tamper-evident
-    record for authorization decisions; the migration history table provides
-    migration checksum integrity, not broader tamper-evidence.
-
-    Raises RuntimeError if any present row records a step that is not in the
-    migration registry, or a checksum that does not match the expected value.
+    Scope and limitations: this validates checksums of rows that are present.
+    It does not make migration history itself tamper-evident against a
+    privileged database administrator.
     """
     cur.execute(
         """

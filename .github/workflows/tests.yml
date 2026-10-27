@@ -96,6 +96,8 @@ jobs:
       - name: Run PostgreSQL integration tests
         run: >-
           uv run pytest
+          tests/test_postgres_migrations_v3.py
+          tests/test_postgres_approvals.py
           tests/test_postgres_stores.py
           tests/test_postgres_execution_store.py
           tests/test_postgres_audit.py
@@ -118,6 +120,7 @@ jobs:
           import psycopg
 
           from ruhusa.postgres import (
+              PostgresApprovalStore,
               PostgresAuditLog,
               PostgresExecutionStore,
               PostgresGrantStore,
@@ -127,6 +130,7 @@ jobs:
           )
 
           assert psycopg is not None
+          assert PostgresApprovalStore is not None
           assert PostgresGrantStore is not None
           assert PostgresRevocationStore is not None
           assert PostgresInvocationStore is not None

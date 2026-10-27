@@ -1,11 +1,19 @@
 # Ruhusa Architecture
 
 **Architecture status:** Living document  
-**Current framework milestone:** v0.6 — validated execution-lifecycle, execution-time authority, and recovery milestone  
-**Current package version:** 0.6.0  
-**Release status:** Pre-1.0 research framework; v0.6.0 validated for release with a frozen security snapshot at `docs/threat-model/v0.6.md`
+**Historical architectural baseline:** v0.6 execution-lifecycle and recovery research  
+**Current published package:** v0.8.0  
+**Next release:** v0.9 under development (not published)  
+**Release status:** Pre-1.0; v0.6 snapshot preserved at `docs/threat-model/v0.6.md`
 
 ---
+
+This document retains the v0.6 architectural analysis and experiments as
+historical context. For v0.8 persistence, schema migration and operational
+behavior, also read [migrations](production/migrations.md),
+[release notes](releases/v0.8.0.md), and
+[production readiness](production/release-readiness.md). The v0.9 approval
+work in PR #28 is unreleased and is not a v0.8 guarantee.
 
 ## 1. Purpose
 

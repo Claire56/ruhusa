@@ -52,6 +52,7 @@ def pool():
             cur.execute(
                 """
                 TRUNCATE TABLE
+                    ruhusa_approvals,
                     ruhusa_revocations,
                     ruhusa_invocations,
                     ruhusa_tools,

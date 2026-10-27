@@ -27,6 +27,8 @@ from .models import (
     DelegationGrant,
     Scope,
 )
+from .postgres_approvals import PostgresApprovalStore as PostgresApprovalStore
+from .postgres_migrations import APPROVAL_SCHEMA_DDL as _APPROVAL_SCHEMA_DDL
 from .postgres_migrations import (
     acquire_migration_lock,
     run_migrations,
@@ -35,7 +37,7 @@ from .postgres_migrations import (
 from .revocation import RevocationRecord
 from .tools import ToolRegistration
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_METADATA_STATEMENT = """
 CREATE TABLE IF NOT EXISTS ruhusa_schema_metadata (
@@ -190,6 +192,11 @@ _SCHEMA_STATEMENTS = (
     )
     """,
 )
+
+
+# v0.9-A: fresh schema-v3 databases must contain the same durable
+# approval table created by the v2→v3 migration.
+_SCHEMA_STATEMENTS = (*_SCHEMA_STATEMENTS, _APPROVAL_SCHEMA_DDL)
 
 
 def create_postgres_pool(

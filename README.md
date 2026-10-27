@@ -11,11 +11,17 @@ Ruhusa means **permission** in Swahili.
 > **Authority should narrow as agents delegate—not expand.**
 
 ## Table of Contents
-* [Overview](#Overview)
-* [Project Status](#Project-Status)
-* [Current Capabilities](#Current-Capabilities)
-* [Research Method](#Research-Method)
-* [Security Model](#Security-Model)
+
+- [Overview](#overview)
+- [Project Status](#project-status)
+- [Current Capabilities](#current-capabilities)
+- [Research Method](#research-method)
+- [Security Model](#security-model)
+- [Documentation](#documentation)
+- [Installation](#installation)
+- [Development](#development)
+- [Milestones](#milestones)
+- [Security](#security)
 
 ## Overview
 
@@ -48,18 +54,39 @@ action may proceed.
 
 ## Project Status
 
-**Current package version:** `0.7.0`
-**Current milestone:** `v0.7` — production interfaces and durable persistence
-**Release status:** stable release
+| Track | Status |
+| --- | --- |
+| Latest published stable package | **v0.8.0** |
+| Next package release | **v0.9.0 — under development, not published** |
+| Stable PostgreSQL schema | **v2** (v0.8.0) |
+| Development PostgreSQL schema | **v3 proposed in PR #28** (durable approvals; not stable) |
+| Stability | Pre-1.0: APIs and guarantees can change |
 
-v0.7 preserves the frozen v0.6 research behavior while adding stable
-dependency protocols and optional PostgreSQL-backed durable security state.
+**For stable installations, use `ruhusa==0.8.0`.** The README on
+`main` describes the published package; it does not mean that code in an
+unmerged v0.9 development branch has shipped.
 
-PostgreSQL-backed implementations are available for grants, revocations,
-invocations, trusted tool registrations, execution lifecycle, and audit.
+v0.8.0 adds schema migrations and migration-history integrity checks,
+production health/observability support, and tested upgrade compatibility
+from published v0.7.0 PostgreSQL state. See the
+[v0.8 release notes](docs/releases/v0.8.0.md).
 
-Ruhusa remains pre-1.0. Public APIs and guarantees may still evolve before
-1.0.
+### v0.9 development roadmap (unreleased)
+
+- Real-agent authorization attack benchmark and reproducible evaluation.
+- MCP authorization integration, separate from the security core.
+- Durable, operation-bound human approval evidence (in development in
+  [PR #28](https://github.com/Claire56/ruhusa/pull/28)).
+- Authenticated recovery evidence and related security tests.
+- Compatibility, concurrency, and failure-path testing before release.
+
+**Do not assume `REQUIRE_APPROVAL` alone is a complete authenticated human
+approval workflow.** The proposed development approval store records an
+approver identity; authentication of that identity remains an integration
+responsibility unless explicitly verified by trusted infrastructure.
+
+The v0.9 roadmap is a plan, not a claim that every item is implemented.
+See [v0.9 development status](docs/development/v0.9-status.md).
 
 ## Current Capabilities
 
@@ -547,6 +574,19 @@ execution recovery, serialized audit-chain persistence, and explicit
 backend failure contracts while preserving the frozen v0.6 research
 artifact.
 
+### v0.8 — Production Hardening and Schema Migration Integrity
+
+Published stable v0.8.0 adds PostgreSQL schema v2, migration history and
+checksum validation, health/telemetry interfaces, and upgrade verification.
+See the [release notes](docs/releases/v0.8.0.md).
+
+### v0.9 — Agent Security Evaluation and Trusted Execution (development)
+
+Unreleased work includes attack evaluation, MCP enforcement integration,
+durable approvals, and authenticated recovery evidence. The proposed v0.9
+approval schema is **v3** and must not be described as part of v0.8.0.
+See [development status](docs/development/v0.9-status.md).
+
 ## Research Direction
 
 The working research question is:
@@ -563,7 +603,7 @@ authorization-time validity != execution-time validity
 execution-time revalidation != atomic authorization + side effect
 ```
 
-Current and future research areas include:
+Ongoing research areas include:
 
 - authorization/execution atomicity
 - downstream idempotency and side-effect deduplication
@@ -588,7 +628,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 See [`SECURITY.md`](SECURITY.md).
 
-See `docs/production/release-readiness.md` for the v0.7 production deployment requirements and explicit non-guarantees.
+See [production readiness](docs/production/release-readiness.md) for deployment requirements and explicit non-guarantees.
 
 ## License
 
