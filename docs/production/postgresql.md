@@ -1,7 +1,8 @@
 # PostgreSQL Persistence
 
-Ruhusa v0.7-B introduces optional PostgreSQL-backed implementations of
-the stable persistence protocols defined in v0.7-A.
+Ruhusa introduced optional PostgreSQL-backed implementations in v0.7.
+The published v0.8.0 package uses PostgreSQL schema v2 with migration
+history validation. The v0.9 development approval schema v3 is not yet stable.
 
 ## Scope
 
@@ -158,7 +159,8 @@ The following are intentionally deferred:
 
 ## Schema compatibility
 
-Ruhusa v0.7 uses PostgreSQL schema version `1`.
+Ruhusa v0.7 used PostgreSQL schema version `1`. Published v0.8.0 uses
+schema version `2`. Development PR #28 proposes schema version `3`.
 
 `initialize_postgres_schema()` first reads the schema metadata for an
 already-versioned database before executing application-table DDL.

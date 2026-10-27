@@ -19,6 +19,7 @@ from ruhusa.postgres import (  # noqa: E402
 from ruhusa.postgres_migrations import (  # noqa: E402
     _ADVISORY_LOCK_KEY,
     _CHECKSUM_V1_TO_V2,
+    _CHECKSUM_V2_TO_V3,
     _MIGRATION_STEPS,
     _MIGRATION_V1_TO_V2,
 )
@@ -532,17 +533,23 @@ def test_migration_from_v1_to_v2_creates_migrations_table(pool) -> None:
 
 
 def test_migration_from_v1_to_v2_records_history(pool) -> None:
-    """The v1→v2 migration must write exactly one history row."""
+    """Migrating from v1 must write exactly one history row per migration step."""
     _setup_v1_schema(pool)
 
     initialize_postgres_schema(pool)
 
     rows = _migration_rows(pool)
-    assert len(rows) == 1
+    assert len(rows) == 2
+
     version_from, version_to, checksum = rows[0]
     assert version_from == 1
     assert version_to == 2
     assert checksum == _CHECKSUM_V1_TO_V2
+
+    version_from, version_to, checksum = rows[1]
+    assert version_from == 2
+    assert version_to == 3
+    assert checksum == _CHECKSUM_V2_TO_V3
 
 
 def test_migration_from_v1_is_idempotent(pool) -> None:
@@ -554,7 +561,10 @@ def test_migration_from_v1_is_idempotent(pool) -> None:
     initialize_postgres_schema(pool)
 
     rows = _migration_rows(pool)
-    assert len(rows) == 1, f"expected one history row after repeated init; got {len(rows)}"
+    v1v2 = [r for r in rows if r[0] == 1 and r[1] == 2]
+    v2v3 = [r for r in rows if r[0] == 2 and r[1] == 3]
+    assert len(v1v2) == 1, "v1→v2 must run exactly once"
+    assert len(v2v3) == 1, "v2→v3 must run exactly once"
 
 
 def test_migration_preserves_all_security_state(pool) -> None:
@@ -703,7 +713,7 @@ def test_migration_history_tamper_is_detected_on_next_startup(pool) -> None:
 
     # Confirm history was written correctly.
     rows = _migration_rows(pool)
-    assert len(rows) == 1
+    assert len(rows) == 2
 
     # Tamper: overwrite the checksum with a plausible-looking but wrong value.
     tampered = "a" * 64

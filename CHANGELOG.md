@@ -4,6 +4,33 @@ All notable changes to Ruhusa are documented here.
 
 Ruhusa follows semantic versioning while the public API remains pre-1.0.
 
+## [Unreleased] — v0.9 development
+
+Development work is not yet part of a published Ruhusa release.
+
+### In progress
+
+- Operation-bound durable approvals and PostgreSQL schema v3 in PR #28.
+- Real-agent attack evaluation, MCP enforcement adapter, and authenticated
+  recovery evidence are planned; do not treat these as shipped features.
+
+### Documentation
+
+- Clarified stable v0.8.0 versus unreleased v0.9 status.
+- Added a development status and documentation audit.
+
+## [0.8.0] — 2026-09-02
+
+### Added
+
+- PostgreSQL schema v2 and ordered, checksummed migration history.
+- Upgrade validation from the published v0.7.0 PostgreSQL schema.
+- Health and operational observability interfaces.
+- Production-hardening and release verification documentation.
+
+See [v0.8.0 release notes](docs/releases/v0.8.0.md) for details and
+security limitations.
+
 ## [0.7.0] - 2026-08-27
 
 ### Added

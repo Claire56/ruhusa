@@ -58,7 +58,7 @@ startup.
 
 **Scope and limitations.** `validate_migration_history` detects modification of
 stored checksums and unrecognized migration steps. It cannot detect deletion of
-a history row — a fresh schema-v2 installation intentionally has zero rows in
+a history row — a fresh installation at its current schema version intentionally has zero rows in
 `ruhusa_schema_migrations`, so an empty table is indistinguishable from one
 that had rows removed. The Ruhusa audit-event chain
 (`ruhusa_audit_events` + `ruhusa_audit_chain`) is the tamper-evident record for
@@ -71,6 +71,18 @@ checksum integrity, not broader tamper-evidence.
 |---------|---------------|----------------------------------------------------------|
 | 1       | Ruhusa 0.7    | Initial production schema (grants, revocations, invocations, tools, audit, executions) |
 | 2       | Ruhusa 0.8    | Migration history tracking via `ruhusa_schema_migrations` |
+
+## Unreleased v0.9 approval migration
+
+The published v0.8.0 package targets schema **v2**. Development PR #28
+proposes schema **v3** for durable approval records. This is not a released
+migration or a guarantee of the stable package.
+
+When testing the PR, validate both the `1 → 2` and `2 → 3` migration records
+for upgrades originating from v0.7 schema v1. Repeated initialization must
+not add duplicate records. Keep the stable v0.7→v0.8 upgrade test separate
+from the v0.7→development-schema-v3 upgrade test so both paths remain covered.
+Do not edit previously applied migration SQL or checksums to make tests pass.
 
 ## Deployment
 

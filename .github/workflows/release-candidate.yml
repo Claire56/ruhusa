@@ -173,7 +173,7 @@ jobs:
                   cur.execute(
                       "SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE"
                   )
-                  assert cur.fetchone() == (2,)
+                  assert cur.fetchone() == (3,)
 
                   cur.execute(
                       """
@@ -182,7 +182,7 @@ jobs:
                       ORDER BY migration_id
                       """
                   )
-                  assert cur.fetchall() == [(1, 2)]
+                  assert cur.fetchall() == [(1, 2), (2, 3)]
 
           pool.close()
           PY

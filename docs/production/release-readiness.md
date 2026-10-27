@@ -1,9 +1,10 @@
-# Ruhusa v0.7 Production Readiness
+# Ruhusa Production Readiness (stable v0.8.0)
 
 ## Status
 
-Ruhusa `0.7.0` is a stable release for the first production-capable
-Ruhusa persistence architecture.
+Ruhusa `0.8.0` is the latest published stable release. This document
+describes stable pre-1.0 deployment expectations; v0.9 approval features
+are development work and must not be assumed available in v0.8.0.
 
 The v0.6 research artifact remains frozen separately.
 
@@ -81,18 +82,18 @@ implementations for:
 Policy evaluation remains behind the `PolicyStore` protocol. Ruhusa does
 not serialize arbitrary Python policy conditions into PostgreSQL.
 
-## Release gate
+## Release and upgrade checks
 
-`0.7.0` may advance to `0.7.0` only when:
+For a stable v0.8.0 deployment, verify:
 
-- formatting passes;
-- linting passes;
-- all unit and adversarial tests pass;
-- all PostgreSQL integration tests pass against a real PostgreSQL service;
-- the source distribution builds;
-- the wheel builds;
-- the base wheel installs without PostgreSQL dependencies;
-- the PostgreSQL wheel extra installs and imports successfully;
-- the deliberate public API contract passes;
-- schema compatibility tests pass;
-- no known security regression is open.
+- formatting, linting and supported test suites pass;
+- PostgreSQL integration tests run against a real database;
+- the v0.7.0 schema-v1 to v0.8.0 schema-v2 upgrade succeeds and preserves data;
+- migration history checksums validate and schema initialization is idempotent;
+- wheel/sdist builds and optional-dependency installation work;
+- the public API, CLI, and installed-package smoke tests pass;
+- no known authorization or fail-closed regression remains open.
+
+See [the archived v0.8.0 release checklist](release-checklist-v0.8.0.md)
+for the historical publication checklist. Development PRs targeting
+v0.9 must separately test schema v3 upgrade paths before merge.
