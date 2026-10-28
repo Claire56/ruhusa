@@ -73,7 +73,8 @@ from published v0.7.0 PostgreSQL state. See the
 
 ### v0.9 development roadmap (unreleased)
 
-- Real-agent authorization attack benchmark and reproducible evaluation.
+- Real-agent authorization attack benchmark and reproducible evaluation
+  (experimental v0.9-B runner; not part of the stable wheel).
 - MCP authorization integration, separate from the security core.
 - Durable, operation-bound human approval evidence (in development in
   [PR #28](https://github.com/Claire56/ruhusa/pull/28)).
@@ -87,6 +88,25 @@ responsibility unless explicitly verified by trusted infrastructure.
 
 The v0.9 roadmap is a plan, not a claim that every item is implemented.
 See [v0.9 development status](docs/development/v0.9-status.md).
+
+### Run the v0.9-B model-driven benchmark (development checkout)
+
+The experimental runner calls an OpenAI-compatible chat-completions endpoint.
+It uses **simulated tool effects only**; no external credits or resources are
+changed. The baseline deliberately executes proposed actions without a gate;
+it is *not* a benchmark of another security product. The prototype uses weak
+invocation provenance and does not establish production security guarantees.
+
+```bash
+export RUHUSA_BENCHMARK_BASE_URL="https://YOUR_PROVIDER/v1"
+export RUHUSA_BENCHMARK_MODEL="YOUR_MODEL"
+export RUHUSA_BENCHMARK_API_KEY="YOUR_API_KEY"
+uv run python -m research.real_agent_benchmark --output benchmark-results/v09b-report.json
+```
+
+API credentials are read from the environment and never included in reports.
+Do not commit benchmark reports containing sensitive user-provided prompts.
+See [v0.9-B benchmark protocol](docs/research/v0.9-b-real-agent-benchmark.md).
 
 ## Current Capabilities
 
