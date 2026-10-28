@@ -10,6 +10,11 @@ Development work is not yet part of a published Ruhusa release.
 
 ### In progress
 
+- v0.9-C2 MCP SDK v2 low-level `tools/call` router prototype: server-owned
+  tool registrations, trusted context resolver, fail-closed guarded dispatch,
+  simulated tool example, and offline security regression tests. No production
+  transport authentication or execution fencing is included.
+
 - v0.9-C experimental transport-neutral MCP tool guard: trusted server-side
   identity/resource bindings, canonical invocation registration, mandatory
   strong provenance, fail-closed authorization-before-async-handler, and
@@ -21,7 +26,7 @@ Development work is not yet part of a published Ruhusa release.
 - Operation-bound durable approvals and PostgreSQL schema v3 in PR #28.
 - Experimental v0.9-B real-model attack benchmark runner, offline fixture tests,
   paired permissive/Ruhusa simulation, and JSON metrics (not yet a release).
-- MCP SDK middleware and authenticated recovery evidence remain planned;
+- Production MCP transport authentication and authenticated recovery evidence remain planned;
   do not treat these as shipped features.
 - Stateful authorization control suite with trusted invocation/tool provenance
   fixtures and regression tests (v0.9-B2; not yet a release).

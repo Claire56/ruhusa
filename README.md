@@ -137,11 +137,16 @@ binding; **never take these from model-generated tool arguments**. A tool handle
 runs only after an audited `ALLOW`. `DENY`, `REQUIRE_APPROVAL`, and infrastructure
 failures prevent execution.
 
-This is **not** an MCP SDK plugin, server implementation, or production execution
-fence. The host application must integrate it into its MCP `tools/call` pathway,
-validate identities at the transport boundary, and use `ExecutionController`
-for idempotent, fenced side effects. See
+The C1 guard by itself is **not** an MCP SDK server implementation or a
+production execution fence. The C2 SDK handler described below wires the guard
+into `tools/call`, but the host must still authenticate transport identity and
+use `ExecutionController` for idempotent, fenced side effects. See
 [experimental MCP integration guidance](docs/integrations/mcp.md).
+
+**v0.9-C2 (experimental):** An optional MCP Python SDK v2 low-level
+`tools/call` router now wraps the C1 guard. See the [SDK handler setup and trust
+requirements](docs/integrations/mcp.md#mcp-sdk-v2-server-integration-v09-c2-prototype).
+Transport authentication and durable side-effect fencing remain host responsibilities.
 
 ### Run the v0.9-B3 live-model stateful benchmark (development checkout)
 

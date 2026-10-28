@@ -73,3 +73,72 @@ result = await guard.call(
 - No distributed/PostgreSQL MCP execution tests have been run for this adapter.
 - `REQUIRE_APPROVAL` is blocked here, not converted to a live approval workflow.
 - Do not expose raw internal error details to an MCP client.
+
+## MCP SDK v2 server integration (v0.9-C2 prototype)
+
+`ruhusa.integrations.mcp_sdk` exposes `ProtectedMCPTool`,
+`RuhusaMCPToolRouter`, and `create_mcp_sdk_server`. This uses the MCP Python
+SDK v2 **low-level `Server(on_list_tools=..., on_call_tool=...)` interface**.
+Its handler routes every `tools/call` through the C1 guard before executing a
+protected handler. The MCP SDK is optional and is imported only when constructing
+the server. Install SDK v2 separately (for example `uv pip install 'mcp>=2,<3'`
+in your environment) and pin an exact compatible version in deployments.
+
+Minimal handler construction after configuring the `RuhusaMCPGuard` and trusted
+`Ruhusa` stores shown earlier:
+
+```python
+from ruhusa.integrations.mcp_sdk import (
+    ProtectedMCPTool,
+    RuhusaMCPToolRouter,
+    create_mcp_sdk_server,
+)
+
+
+# This resolver MUST inspect authenticated server-side session state (e.g. a
+# verified OIDC token or trusted workload identity). Never read principal,
+# task, grants, or tool implementation from model-supplied tool arguments.
+async def resolve_authenticated_context(server_request_context):
+    raise NotImplementedError("Integrate your host's trusted authentication")
+
+
+async def simulated_credit(arguments):
+    return {"simulated_credit": arguments["amount"]}
+
+
+router = RuhusaMCPToolRouter(
+    guard,
+    tools=(
+        ProtectedMCPTool(
+            binding=binding,  # fixed, server-owned MCPToolBinding
+            description="Simulate customer credit (no real ledger change)",
+            input_schema={
+                "type": "object",
+                "properties": {"amount": {"type": "integer", "minimum": 0}},
+                "required": ["amount"],
+                "additionalProperties": False,
+            },
+            handler=simulated_credit,
+        ),
+    ),
+    trusted_context=resolve_authenticated_context,
+)
+server = create_mcp_sdk_server(router)
+# Host must configure authenticated transport, lifecycle, and deployment.
+# app = server.streamable_http_app()  # SDK v2; secure the transport first
+```
+
+**Security limitations:** This is an SDK handler integration, not a complete
+HTTP identity provider or production-safe side-effect engine. Advertised
+`input_schema` does not guarantee validation in the low-level SDK, so handlers
+must validate argument shapes and never assume the client obeyed the schema.
+The C1 guard enforces the modeled credit limit, but future integrations must
+validate all action-specific data before reaching side-effect handlers.
+The adapter intentionally returns a generic authorization error; it does not
+leak a denial's internal policy details. Other execution failures propagate.
+
+Before production deployment, add an authenticated transport resolver, real
+MCP client/server integration tests against the pinned SDK version, durable
+execution claims/fencing, replay tests, and PostgreSQL concurrency coverage.
+The SDK's middleware API is provisional; this implementation deliberately uses
+its low-level tool-call handler instead.
