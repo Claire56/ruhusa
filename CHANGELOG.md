@@ -10,6 +10,10 @@ Development work is not yet part of a published Ruhusa release.
 
 ### In progress
 
+- v0.9-D1 signed recovery evidence prototype with trusted issuer/key verification,
+  invocation/claim/attempt binding, expiry validation, replay checks, and
+  fail-closed UNKNOWN transitions. In-memory replay only; not production-ready.
+
 - v0.9-B3 experimental live-model/stateful authorization benchmark, with independently
   specified reference decisions, isolated trusted invocation fixtures, paired
   simulated baseline, coverage accounting, offline tests, and research protocol.
