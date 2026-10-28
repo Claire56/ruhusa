@@ -10,6 +10,9 @@ Development work is not yet part of a published Ruhusa release.
 
 ### In progress
 
+- v0.9-D1 signed recovery evidence prototype with trusted issuer/key verification,
+  invocation/claim/attempt binding, expiry validation, replay checks, and
+  fail-closed UNKNOWN transitions. In-memory replay only; not production-ready.
 - v0.9-C2 MCP SDK v2 low-level `tools/call` router prototype: server-owned
   tool registrations, trusted context resolver, fail-closed guarded dispatch,
   simulated tool example, and offline security regression tests. No production
