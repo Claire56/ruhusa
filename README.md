@@ -127,6 +127,28 @@ These tests simulate side effects only; they do **not** prove identical-operatio
 replay prevention, distributed execution fencing, or model-driven attack
 resistance. See [B2 experiment notes](docs/research/v0.9-b2-stateful-authorization.md).
 
+### Run the v0.9-B3 live-model stateful benchmark (development checkout)
+
+B3 connects model-generated credit-tool proposals to isolated **trusted
+in-memory** authorization fixtures. It evaluates nine scenarios with an
+independent reference oracle, reporting both attack coverage and decisions.
+No external tool operations occur. A model's refusal or harmless proposal is
+**not** counted as Ruhusa successfully blocking an attack.
+
+```bash
+export RUHUSA_BENCHMARK_BASE_URL="https://api.openai.com/v1"
+export RUHUSA_BENCHMARK_MODEL="gpt-4.1-mini"
+export RUHUSA_BENCHMARK_API_KEY="$OPENAI_API_KEY"
+uv run python -m research.live_stateful_benchmark \
+  --trials 1 --output benchmark-results/v09b3-report.json
+uv run pytest tests/test_v09_live_stateful_benchmark.py
+```
+
+Credentials are read from the environment and not written to reports. See
+[B3 experiment protocol](docs/research/v0.9-b3-live-stateful.md) for coverage,
+metrics, and limitations. B3 does **not** yet prove identical-operation replay
+prevention, distributed execution fencing, or production tool security.
+
 ## Current Capabilities
 
 Ruhusa currently includes research implementations for:
