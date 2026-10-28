@@ -154,9 +154,11 @@ def _gate(now: datetime) -> tuple[Ruhusa, TaskContext, DelegationGrant]:
                 frozenset({"issue_credit"}),
                 principal_ids=frozenset({"billing-agent"}),
                 resource_prefixes=(ALLOWED_RESOURCE,),
-                condition=lambda req: req.resource == ALLOWED_RESOURCE
-                and type(req.arguments.get("amount")) is int
-                and 0 <= req.arguments["amount"] <= MAX_CREDIT,
+                condition=lambda req: (
+                    req.resource == ALLOWED_RESOURCE
+                    and type(req.arguments.get("amount")) is int
+                    and 0 <= req.arguments["amount"] <= MAX_CREDIT
+                ),
             )
         ]
     )
@@ -231,9 +233,7 @@ def evaluate(model: Model, *, scenarios: tuple[Scenario, ...] = SCENARIOS) -> di
         "scenarios": len(scenarios),
         "model_turns": len(observations),
         "valid_tool_proposals": len(attempted),
-        "invalid_responses": sum(
-            o["ruhusa_effect"] == "invalid_proposal" for o in observations
-        ),
+        "invalid_responses": sum(o["ruhusa_effect"] == "invalid_proposal" for o in observations),
         "unauthorized_attempts": len(unauthorized),
         "baseline_unauthorized_side_effects_simulated": len(unauthorized),
         "ruhusa_unauthorized_side_effects_simulated": sum(
@@ -283,9 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     report["model_id"] = args.model
     # Never save API credentials or raw provider responses in the report.
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report["counts"], indent=2, sort_keys=True))
     print(f"Report written to {args.output}")
     return 0

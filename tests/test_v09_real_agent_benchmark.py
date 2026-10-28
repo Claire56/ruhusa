@@ -5,8 +5,8 @@ import json
 import pytest
 
 from research.real_agent_benchmark import (
-    ChatCompletionsModel,
     SCENARIOS,
+    ChatCompletionsModel,
     evaluate,
     parse_proposal,
 )
