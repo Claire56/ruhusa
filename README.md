@@ -108,6 +108,25 @@ API credentials are read from the environment and never included in reports.
 Do not commit benchmark reports containing sensitive user-provided prompts.
 See [v0.9-B benchmark protocol](docs/research/v0.9-b-real-agent-benchmark.md).
 
+### Run the v0.9-B2 stateful benchmark (development checkout)
+
+The stateful control suite exercises **real Ruhusa authorization decisions**
+using trusted in-memory invocation records, tool identity, scoped delegation,
+revocation, cross-task mismatch, operation substitution, and invocation expiry.
+Expected decisions are specified independently of the authorization results.
+This is a deterministic, **non-LLM** control suite; the earlier v0.9-B runner
+remains the model-driven proposal experiment.
+
+```bash
+uv run python -m research.stateful_attack_benchmark \
+  --output benchmark-results/v09b2-stateful.json
+uv run pytest tests/test_v09_stateful_attack_benchmark.py
+```
+
+These tests simulate side effects only; they do **not** prove identical-operation
+replay prevention, distributed execution fencing, or model-driven attack
+resistance. See [B2 experiment notes](docs/research/v0.9-b2-stateful-authorization.md).
+
 ## Current Capabilities
 
 Ruhusa currently includes research implementations for:

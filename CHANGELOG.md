@@ -15,6 +15,8 @@ Development work is not yet part of a published Ruhusa release.
   paired permissive/Ruhusa simulation, and JSON metrics (not yet a release).
 - MCP enforcement adapter and authenticated recovery evidence remain planned;
   do not treat these as shipped features.
+- Stateful authorization control suite with trusted invocation/tool provenance
+  fixtures and regression tests (v0.9-B2; not yet a release).
 
 ### Documentation
 
