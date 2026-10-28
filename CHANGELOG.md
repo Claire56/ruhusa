@@ -10,6 +10,9 @@ Development work is not yet part of a published Ruhusa release.
 
 ### In progress
 
+- v0.9-B3 experimental live-model/stateful authorization benchmark, with independently
+  specified reference decisions, isolated trusted invocation fixtures, paired
+  simulated baseline, coverage accounting, offline tests, and research protocol.
 - Operation-bound durable approvals and PostgreSQL schema v3 in PR #28.
 - Experimental v0.9-B real-model attack benchmark runner, offline fixture tests,
   paired permissive/Ruhusa simulation, and JSON metrics (not yet a release).
