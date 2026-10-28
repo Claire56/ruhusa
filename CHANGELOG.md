@@ -36,6 +36,14 @@ Development work is not yet part of a published Ruhusa release.
 - Clarified stable v0.8.0 versus unreleased v0.9 status.
 - Added a development status and documentation audit.
 
+### v0.9-C2 protocol verification (unreleased)
+
+- Added an optional real MCP Python SDK v2 client/server round-trip test for
+  `tools/list` and `tools/call`, including allowed, denied, and missing-trusted-identity paths.
+- The protocol test exercises only simulated side effects and skips when the
+  optional SDK is not installed; production authentication and durable fencing
+  remain future validation gates.
+
 ## [0.8.0] — 2026-09-02
 
 ### Added

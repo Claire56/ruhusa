@@ -142,3 +142,32 @@ MCP client/server integration tests against the pinned SDK version, durable
 execution claims/fencing, replay tests, and PostgreSQL concurrency coverage.
 The SDK's middleware API is provisional; this implementation deliberately uses
 its low-level tool-call handler instead.
+
+### C2 verification: real MCP client/server round-trip (development)
+
+`tests/test_v09_mcp_real_sdk_roundtrip.py` uses the actual SDK v2
+`Client(server)` in-process transport to exercise MCP negotiation,
+`tools/list`, and `tools/call`. It checks that an authorized simulated
+credit reaches the protected handler once, while an over-limit request
+and a request without trusted server-side identity return errors and do
+not invoke the handler. This avoids opening a port or changing any ledger.
+
+Install MCP SDK v2 in a disposable development environment, for example:
+
+```bash
+uv pip install 'mcp>=2,<3'
+uv run pytest tests/test_v09_mcp_real_sdk_roundtrip.py -v
+```
+
+**Important:** `uv run` may re-sync an environment and remove packages
+installed only with `uv pip install`; if that happens, run tests with the
+same environment's `pytest`, or add the SDK as a temporary uv run dependency:
+
+```bash
+uv run --with 'mcp>=2,<3' pytest tests/test_v09_mcp_real_sdk_roundtrip.py -v
+```
+
+The test is skipped when the optional SDK is unavailable. A passing
+in-process protocol test is **not** equivalent to authenticated HTTP
+transport, process-boundary testing, or durable exactly-once execution.
+Pin and validate an exact SDK version before production use.

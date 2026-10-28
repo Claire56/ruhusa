@@ -148,6 +148,20 @@ use `ExecutionController` for idempotent, fenced side effects. See
 requirements](docs/integrations/mcp.md#mcp-sdk-v2-server-integration-v09-c2-prototype).
 Transport authentication and durable side-effect fencing remain host responsibilities.
 
+#### MCP SDK round-trip validation (v0.9 development)
+
+The optional `tests/test_v09_mcp_real_sdk_roundtrip.py` test connects an
+actual MCP SDK v2 client to the low-level Ruhusa-protected server using
+an in-process transport. It checks allowed and denied tool calls and verifies
+that denied calls never reach the example handler. Run it with:
+
+```bash
+uv run --with 'mcp>=2,<3' pytest tests/test_v09_mcp_real_sdk_roundtrip.py -v
+```
+
+This is a development integration test, not a production transport or
+execution-fencing guarantee. See [MCP integration](docs/integrations/mcp.md).
+
 ### Run the v0.9-B3 live-model stateful benchmark (development checkout)
 
 B3 connects model-generated credit-tool proposals to isolated **trusted
