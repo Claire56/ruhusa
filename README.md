@@ -127,6 +127,41 @@ These tests simulate side effects only; they do **not** prove identical-operatio
 replay prevention, distributed execution fencing, or model-driven attack
 resistance. See [B2 experiment notes](docs/research/v0.9-b2-stateful-authorization.md).
 
+### MCP authorization guard (v0.9-C, experimental)
+
+The **unreleased** development checkout includes a transport-neutral MCP tool-call
+boundary at `ruhusa.integrations.mcp`. It uses `TrustedInvocationFactory` and
+requires both a trusted invocation store and a registered tool identity. The
+server supplies authenticated principal/task context and a fixed tool/resource
+binding; **never take these from model-generated tool arguments**. A tool handler
+runs only after an audited `ALLOW`. `DENY`, `REQUIRE_APPROVAL`, and infrastructure
+failures prevent execution.
+
+The C1 guard by itself is **not** an MCP SDK server implementation or a
+production execution fence. The C2 SDK handler described below wires the guard
+into `tools/call`, but the host must still authenticate transport identity and
+use `ExecutionController` for idempotent, fenced side effects. See
+[experimental MCP integration guidance](docs/integrations/mcp.md).
+
+**v0.9-C2 (experimental):** An optional MCP Python SDK v2 low-level
+`tools/call` router now wraps the C1 guard. See the [SDK handler setup and trust
+requirements](docs/integrations/mcp.md#mcp-sdk-v2-server-integration-v09-c2-prototype).
+Transport authentication and durable side-effect fencing remain host responsibilities.
+
+#### MCP SDK round-trip validation (v0.9 development)
+
+The optional `tests/test_v09_mcp_real_sdk_roundtrip.py` test connects an
+actual MCP SDK v2 client to the low-level Ruhusa-protected server using
+an in-process transport. It checks allowed and denied tool calls and verifies
+that denied calls never reach the example handler. Run it with:
+
+```bash
+uv run --with 'mcp>=2,<3' pytest tests/test_v09_mcp_real_sdk_roundtrip.py -v
+```
+
+This is a development integration test, not a production transport or
+execution-fencing guarantee. See [MCP integration](docs/integrations/mcp.md).
+
 ### Run the v0.9-B3 live-model stateful benchmark (development checkout)
 
 B3 connects model-generated credit-tool proposals to isolated **trusted
