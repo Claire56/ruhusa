@@ -2,7 +2,7 @@
 
 **Development status:** D1 prototype, not a v0.9 release or a production-grade distributed reconciliation service.
 
-An `UNKNOWN` execution MUST NOT become retryable merely because an agent reports that a side effect did not happen. The v0.9-D1 `AuthenticatedRecoveryService` accepts an authenticated reconciliation receipt only if:
+An `UNKNOWN` execution MUST NOT become retryable merely because an agent reports that a side effect did not happen. The v0.9-D1 `AuthenticatedRecoveryService` accepts a cryptographically authenticated reconciliation receipt only if:
 
 - An allowlisted issuer/key pair authenticates a canonical HMAC-SHA256 receipt (with constant-time signature comparison).
 - Receipt timestamps are timezone-aware, already issued, unexpired, and within the configured maximum lifetime.

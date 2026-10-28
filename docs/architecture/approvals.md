@@ -1,6 +1,6 @@
 # Durable approvals
 
-Ruhusa v0.9-A introduces a human-approval primitive bound to canonical invocation provenance.
+The unreleased Ruhusa v0.9-A development implementation introduces a human-approval primitive bound to canonical invocation provenance.
 
 ## Security model
 
@@ -33,4 +33,6 @@ Approval consumption is bound to an `ExecutionPermit` (`invocation_id`, `claim_i
 
 ## Trust boundary
 
-`approved_by`, `rejected_by`, and `revoked_by` are supplied by trusted integration infrastructure. v0.9-A records these identities but does not authenticate them; verified external identity belongs to v0.9-B.
+`approved_by`, `rejected_by`, and `revoked_by` are supplied by trusted integration infrastructure. v0.9-A records these identities but does not authenticate them. Verified external
+identity remains the responsibility of trusted host/identity infrastructure;
+the B-series attack benchmarks do not supply an authentication adapter.

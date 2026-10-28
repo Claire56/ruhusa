@@ -71,14 +71,16 @@ checksum integrity, not broader tamper-evidence.
 |---------|---------------|----------------------------------------------------------|
 | 1       | Ruhusa 0.7    | Initial production schema (grants, revocations, invocations, tools, audit, executions) |
 | 2       | Ruhusa 0.8    | Migration history tracking via `ruhusa_schema_migrations` |
+| 3       | v0.9 development (unreleased) | Durable approval schema |
 
 ## Unreleased v0.9 approval migration
 
-The published v0.8.0 package targets schema **v2**. Development PR #28
-proposes schema **v3** for durable approval records. This is not a released
-migration or a guarantee of the stable package.
+The published v0.8.0 package targets schema **v2**. The current development
+source sets `SCHEMA_VERSION = 3` and contains the `2 → 3` durable-approval
+migration. This migration is **not** included in the stable published v0.8.0
+distribution, even if the development source retains package metadata `0.8.0`.
 
-When testing the PR, validate both the `1 → 2` and `2 → 3` migration records
+When testing development schema v3, validate both the `1 → 2` and `2 → 3` migration records
 for upgrades originating from v0.7 schema v1. Repeated initialization must
 not add duplicate records. Keep the stable v0.7→v0.8 upgrade test separate
 from the v0.7→development-schema-v3 upgrade test so both paths remain covered.

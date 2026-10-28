@@ -59,12 +59,12 @@ action may proceed.
 | Latest published stable package | **v0.8.0** |
 | Next package release | **v0.9.0 — under development, not published** |
 | Stable PostgreSQL schema | **v2** (v0.8.0) |
-| Development PostgreSQL schema | **v3 proposed in PR #28** (durable approvals; not stable) |
+| Development PostgreSQL schema | **v3 in unreleased development source** (durable approvals; not stable) |
 | Stability | Pre-1.0: APIs and guarantees can change |
 
-**For stable installations, use `ruhusa==0.8.0`.** The README on
-`main` describes the published package; it does not mean that code in an
-unmerged v0.9 development branch has shipped.
+**For stable installations, use `ruhusa==0.8.0`.** The checked-out repository may contain unreleased v0.9 code even while
+package metadata remains `0.8.0`; a source checkout is not equivalent to
+the published v0.8.0 wheel.
 
 v0.8.0 adds schema migrations and migration-history integrity checks,
 production health/observability support, and tested upgrade compatibility
@@ -76,10 +76,9 @@ from published v0.7.0 PostgreSQL state. See the
 - Real-agent authorization attack benchmark and reproducible evaluation
   (experimental v0.9-B runner; not part of the stable wheel).
 - MCP authorization integration, separate from the security core.
-- Durable, operation-bound human approval evidence (in development in
-  [PR #28](https://github.com/Claire56/ruhusa/pull/28)).
+- Durable, operation-bound human approval evidence (v0.9-A development;
+  [approval security model](docs/architecture/approvals.md)).
 - Authenticated recovery evidence: [v0.9-D1 signed-receipt prototype](docs/security/authenticated-recovery.md) (unreleased; distributed integration pending).
-- Authenticated recovery evidence and related security tests.
 - Compatibility, concurrency, and failure-path testing before release.
 
 **Do not assume `REQUIRE_APPROVAL` alone is a complete authenticated human
@@ -87,7 +86,8 @@ approval workflow.** The proposed development approval store records an
 approver identity; authentication of that identity remains an integration
 responsibility unless explicitly verified by trusted infrastructure.
 
-The v0.9 roadmap is a plan, not a claim that every item is implemented.
+The v0.9 roadmap combines implemented development prototypes with pending
+release gates; none of these prototypes is a stable v0.9 release.
 See [v0.9 development status](docs/development/v0.9-status.md).
 
 ### Run the v0.9-B model-driven benchmark (development checkout)
@@ -127,6 +127,41 @@ uv run pytest tests/test_v09_stateful_attack_benchmark.py
 These tests simulate side effects only; they do **not** prove identical-operation
 replay prevention, distributed execution fencing, or model-driven attack
 resistance. See [B2 experiment notes](docs/research/v0.9-b2-stateful-authorization.md).
+
+### MCP authorization guard (v0.9-C, experimental)
+
+The **unreleased** development checkout includes a transport-neutral MCP tool-call
+boundary at `ruhusa.integrations.mcp`. It uses `TrustedInvocationFactory` and
+requires both a trusted invocation store and a registered tool identity. The
+server supplies authenticated principal/task context and a fixed tool/resource
+binding; **never take these from model-generated tool arguments**. A tool handler
+runs only after an audited `ALLOW`. `DENY`, `REQUIRE_APPROVAL`, and infrastructure
+failures prevent execution.
+
+The C1 guard by itself is **not** an MCP SDK server implementation or a
+production execution fence. The C2 SDK handler described below wires the guard
+into `tools/call`, but the host must still authenticate transport identity and
+use `ExecutionController` for idempotent, fenced side effects. See
+[experimental MCP integration guidance](docs/integrations/mcp.md).
+
+**v0.9-C2 (experimental):** An optional MCP Python SDK v2 low-level
+`tools/call` router now wraps the C1 guard. See the [SDK handler setup and trust
+requirements](docs/integrations/mcp.md#mcp-sdk-v2-server-integration-v09-c2-prototype).
+Transport authentication and durable side-effect fencing remain host responsibilities.
+
+#### MCP SDK round-trip validation (v0.9 development)
+
+The optional `tests/test_v09_mcp_real_sdk_roundtrip.py` test connects an
+actual MCP SDK v2 client to the low-level Ruhusa-protected server using
+an in-process transport. It checks allowed and denied tool calls and verifies
+that denied calls never reach the example handler. Run it with:
+
+```bash
+uv run --with 'mcp>=2,<3' pytest tests/test_v09_mcp_real_sdk_roundtrip.py -v
+```
+
+This is a development integration test, not a production transport or
+execution-fencing guarantee. See [MCP integration](docs/integrations/mcp.md).
 
 ### Run the v0.9-B3 live-model stateful benchmark (development checkout)
 
