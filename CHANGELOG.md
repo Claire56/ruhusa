@@ -10,13 +10,18 @@ Development work is not yet part of a published Ruhusa release.
 
 ### In progress
 
+- v0.9-C experimental transport-neutral MCP tool guard: trusted server-side
+  identity/resource bindings, canonical invocation registration, mandatory
+  strong provenance, fail-closed authorization-before-async-handler, and
+  six offline regression tests. Not yet an SDK middleware or execution fence.
+
 - v0.9-B3 experimental live-model/stateful authorization benchmark, with independently
   specified reference decisions, isolated trusted invocation fixtures, paired
   simulated baseline, coverage accounting, offline tests, and research protocol.
 - Operation-bound durable approvals and PostgreSQL schema v3 in PR #28.
 - Experimental v0.9-B real-model attack benchmark runner, offline fixture tests,
   paired permissive/Ruhusa simulation, and JSON metrics (not yet a release).
-- MCP enforcement adapter and authenticated recovery evidence remain planned;
+- MCP SDK middleware and authenticated recovery evidence remain planned;
   do not treat these as shipped features.
 - Stateful authorization control suite with trusted invocation/tool provenance
   fixtures and regression tests (v0.9-B2; not yet a release).

@@ -127,6 +127,22 @@ These tests simulate side effects only; they do **not** prove identical-operatio
 replay prevention, distributed execution fencing, or model-driven attack
 resistance. See [B2 experiment notes](docs/research/v0.9-b2-stateful-authorization.md).
 
+### MCP authorization guard (v0.9-C, experimental)
+
+The **unreleased** development checkout includes a transport-neutral MCP tool-call
+boundary at `ruhusa.integrations.mcp`. It uses `TrustedInvocationFactory` and
+requires both a trusted invocation store and a registered tool identity. The
+server supplies authenticated principal/task context and a fixed tool/resource
+binding; **never take these from model-generated tool arguments**. A tool handler
+runs only after an audited `ALLOW`. `DENY`, `REQUIRE_APPROVAL`, and infrastructure
+failures prevent execution.
+
+This is **not** an MCP SDK plugin, server implementation, or production execution
+fence. The host application must integrate it into its MCP `tools/call` pathway,
+validate identities at the transport boundary, and use `ExecutionController`
+for idempotent, fenced side effects. See
+[experimental MCP integration guidance](docs/integrations/mcp.md).
+
 ### Run the v0.9-B3 live-model stateful benchmark (development checkout)
 
 B3 connects model-generated credit-tool proposals to isolated **trusted
