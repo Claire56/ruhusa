@@ -219,3 +219,6 @@ __marimo__/
 .DS_Store
 LICENSE_NOTE.txt
 ruhusa-v0.6-A.patch
+
+# Local model benchmark reports (may contain generated content)
+benchmark-results/
