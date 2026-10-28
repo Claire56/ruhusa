@@ -8,7 +8,7 @@ Ruhusa follows semantic versioning while the public API remains pre-1.0.
 
 Development work is not yet part of a published Ruhusa release.
 
-### In progress
+### Implemented in development (unreleased)
 
 - v0.9-D1 signed recovery evidence prototype with trusted issuer/key verification,
   invocation/claim/attempt binding, expiry validation, replay checks, and
@@ -29,8 +29,8 @@ Development work is not yet part of a published Ruhusa release.
 - Operation-bound durable approvals and PostgreSQL schema v3 in PR #28.
 - Experimental v0.9-B real-model attack benchmark runner, offline fixture tests,
   paired permissive/Ruhusa simulation, and JSON metrics (not yet a release).
-- Production MCP transport authentication and authenticated recovery evidence remain planned;
-  do not treat these as shipped features.
+- Production MCP transport authentication and **distributed authenticated recovery**
+  remain pending; D1 provides only a development prototype, not a shipped guarantee.
 - Stateful authorization control suite with trusted invocation/tool provenance
   fixtures and regression tests (v0.9-B2; not yet a release).
 

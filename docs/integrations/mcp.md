@@ -137,9 +137,11 @@ validate all action-specific data before reaching side-effect handlers.
 The adapter intentionally returns a generic authorization error; it does not
 leak a denial's internal policy details. Other execution failures propagate.
 
-Before production deployment, add an authenticated transport resolver, real
-MCP client/server integration tests against the pinned SDK version, durable
-execution claims/fencing, replay tests, and PostgreSQL concurrency coverage.
+Before production deployment, add an authenticated transport resolver,
+durable execution claims/fencing, replay tests, PostgreSQL concurrency
+coverage, and deployment tests against an exactly pinned SDK version.
+An in-process client/server round-trip test exists but does not cover HTTP
+authentication or process boundaries.
 The SDK's middleware API is provisional; this implementation deliberately uses
 its low-level tool-call handler instead.
 
