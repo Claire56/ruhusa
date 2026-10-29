@@ -1,6 +1,6 @@
 # Authenticated recovery evidence (v0.9-D development)
 
-**Development status:** D1 prototype, not a v0.9 release or a production-grade distributed reconciliation service.
+**Development status:** D1 signed-evidence prototype plus opt-in D2 PostgreSQL atomic recovery adapter. Neither is a v0.9 release or complete production recovery enforcement.
 
 An `UNKNOWN` execution MUST NOT become retryable merely because an agent reports that a side effect did not happen. The v0.9-D1 `AuthenticatedRecoveryService` accepts a cryptographically authenticated reconciliation receipt only if:
 
@@ -40,3 +40,53 @@ accepted = service.reconcile(receipt, now=datetime.now(UTC))
 3. HMAC key compromise allows evidence forgery. Provision/rotate signing keys through trusted identity and secrets infrastructure; do not embed them in agent prompts or logs.
 4. A valid receipt is only as truthful as its issuer. An external transaction lookup or signed provider outcome must substantiate the result; D1 does not itself validate external payments or tool side effects.
 5. PostgreSQL integration tests, cross-process replay, auditing, revocation of issuer keys, and evidence retention still require release validation. Do not claim production-safe authenticated recovery from these in-memory tests alone.
+
+
+## D2: opt-in PostgreSQL atomic reconciliation (unreleased)
+
+`PostgresAuthenticatedRecoveryService` in `ruhusa.postgres_recovery` verifies a signed
+receipt **before** opening a transaction. Within one PostgreSQL transaction it locks
+the exact execution row (`SELECT ... FOR UPDATE`), verifies that the execution is
+`UNKNOWN` and its claim ID and attempt number match the receipt, inserts a
+unique recovery receipt, and transitions the execution to `COMPLETED` or
+`AVAILABLE`. A rollback undoes both the receipt and transition; a second replica
+cannot simultaneously reconcile the same execution attempt. The receipt table
+uses both a unique evidence ID and a unique `(invocation_id, claim_id, attempt)`
+constraint. The state transition is still not atomic with an external side effect.
+
+**Opt-in schema:** The D2 receipt table is *not* yet part of schema v3 or a
+versioned migration. This avoids rewriting existing migration history during
+an experimental increment. Operators must explicitly initialize the table in
+a development/test PostgreSQL environment after the regular Ruhusa schema:
+
+```python
+from ruhusa.postgres_recovery import PostgresAuthenticatedRecoveryService
+
+PostgresAuthenticatedRecoveryService.initialize(pool)
+service = PostgresAuthenticatedRecoveryService(pool, verifier)
+accepted = service.reconcile(receipt)
+```
+
+Use a dedicated trusted reconciler database role. Do **not** grant direct
+`UPDATE` on `ruhusa_executions`, `INSERT` on `ruhusa_recovery_receipts`,
+or access to raw `reconcile_unknown()` from untrusted HTTP/agent workloads.
+The D2 service currently operates using the database privileges of its pool;
+this is an architectural access-control requirement, **not** an automatically
+enforced PostgreSQL role separation.
+
+Run the integration tests against an **isolated test database** (the tests
+truncate their execution/receipt tables):
+
+```bash
+uv run --extra postgres pytest tests/test_v09_postgres_authenticated_recovery.py -v
+```
+
+Set `RUHUSA_TEST_POSTGRES_DSN` first. Without this setting, tests skip. No
+claims about concurrency or recovery transactions are established by skipped tests.
+
+**Still pending before v0.9 release:** versioned migration and fresh/upgrade
+schema equivalence, PostgreSQL CI verification, restricted privileged recovery
+entrypoints (including legacy APIs), issuer-key lifecycle/revocation, audit
+integration, operational evidence retention, external outcome provenance and
+crash/restart fault injection. Authentication proves who signed a claim, not
+whether a provider's reported outcome was truthful.
