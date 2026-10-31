@@ -539,7 +539,7 @@ def test_migration_from_v1_to_v2_records_history(pool) -> None:
     initialize_postgres_schema(pool)
 
     rows = _migration_rows(pool)
-    assert len(rows) == 2
+    assert len(rows) == 3
 
     version_from, version_to, checksum = rows[0]
     assert version_from == 1
@@ -713,7 +713,7 @@ def test_migration_history_tamper_is_detected_on_next_startup(pool) -> None:
 
     # Confirm history was written correctly.
     rows = _migration_rows(pool)
-    assert len(rows) == 2
+    assert len(rows) == 3
 
     # Tamper: overwrite the checksum with a plausible-looking but wrong value.
     tampered = "a" * 64
