@@ -42,7 +42,9 @@ def pool():
 
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE ruhusa_executions")
+            cur.execute(
+                "TRUNCATE TABLE ruhusa_recovery_receipts, ruhusa_executions RESTART IDENTITY"
+            )
 
     try:
         yield pool
