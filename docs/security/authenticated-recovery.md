@@ -54,18 +54,25 @@ cannot simultaneously reconcile the same execution attempt. The receipt table
 uses both a unique evidence ID and a unique `(invocation_id, claim_id, attempt)`
 constraint. The state transition is still not atomic with an external side effect.
 
-**Opt-in schema:** The D2 receipt table is *not* yet part of schema v3 or a
-versioned migration. This avoids rewriting existing migration history during
-an experimental increment. Operators must explicitly initialize the table in
-a development/test PostgreSQL environment after the regular Ruhusa schema:
+**D3 migration (development schema v4):** The receipts table is now created
+by `initialize_postgres_schema(pool)` on fresh schema-v4 databases and through
+a checksum-registered v3→v4 migration when upgrading schema-v3 databases.
+The older D2 `PostgresAuthenticatedRecoveryService.initialize(pool)` method
+remains for compatibility, but is no longer required after schema initialization.
 
 ```python
+from ruhusa.postgres import initialize_postgres_schema
 from ruhusa.postgres_recovery import PostgresAuthenticatedRecoveryService
 
-PostgresAuthenticatedRecoveryService.initialize(pool)
+initialize_postgres_schema(pool)
 service = PostgresAuthenticatedRecoveryService(pool, verifier)
 accepted = service.reconcile(receipt)
 ```
+
+**Migration warning:** Back up your database before upgrading to development
+schema v4. Applications using an older Ruhusa release with schema-v3 expectations
+may refuse to initialize against schema v4. Do not deploy mixed versions until
+compatibility is reviewed.
 
 Use a dedicated trusted reconciler database role. Do **not** grant direct
 `UPDATE` on `ruhusa_executions`, `INSERT` on `ruhusa_recovery_receipts`,
@@ -84,8 +91,8 @@ uv run --extra postgres pytest tests/test_v09_postgres_authenticated_recovery.py
 Set `RUHUSA_TEST_POSTGRES_DSN` first. Without this setting, tests skip. No
 claims about concurrency or recovery transactions are established by skipped tests.
 
-**Still pending before v0.9 release:** versioned migration and fresh/upgrade
-schema equivalence, PostgreSQL CI verification, restricted privileged recovery
+**Still pending before v0.9 release:** full fresh/upgrade migration validation,
+PostgreSQL CI verification, restricted privileged recovery
 entrypoints (including legacy APIs), issuer-key lifecycle/revocation, audit
 integration, operational evidence retention, external outcome provenance and
 crash/restart fault injection. Authentication proves who signed a claim, not

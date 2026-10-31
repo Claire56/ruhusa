@@ -10,6 +10,10 @@ Development work is not yet part of a published Ruhusa release.
 
 ### Implemented in development (unreleased)
 
+- v0.9-D3a schema v4 migration: versioned v3→v4 step adds
+  ruhusa_recovery_receipts automatically via initialize_postgres_schema();
+  SCHEMA_VERSION bumped to 4; migration checksum integrity verified at runtime.
+
 - v0.9-D2 opt-in PostgreSQL authenticated recovery: verified receipts and
   conditional UNKNOWN transitions within one transaction, unique receipt/attempt
   keys, and PostgreSQL integration tests (run only with configured test DSN).

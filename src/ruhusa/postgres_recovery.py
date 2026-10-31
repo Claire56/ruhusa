@@ -9,32 +9,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from .execution import ExecutionRecoveryOutcome, ExecutionState
+from .postgres_migrations import RECOVERY_RECEIPTS_SCHEMA_DDL as RECOVERY_RECEIPTS_DDL
 from .recovery_evidence import RecoveryEvidence, RecoveryEvidenceVerifier, _utc
-
-RECOVERY_RECEIPTS_DDL = """
-CREATE TABLE IF NOT EXISTS ruhusa_recovery_receipts (
-    evidence_id TEXT PRIMARY KEY,
-    invocation_id TEXT NOT NULL REFERENCES ruhusa_executions(invocation_id),
-    claim_id TEXT NOT NULL,
-    attempt INTEGER NOT NULL CHECK (attempt > 0),
-    issuer TEXT NOT NULL,
-    key_id TEXT NOT NULL,
-    outcome TEXT NOT NULL CHECK (
-        outcome IN ('side_effect_confirmed', 'side_effect_not_applied')
-    ),
-    signature TEXT NOT NULL,
-    reconciled_at TIMESTAMPTZ NOT NULL,
-    UNIQUE (invocation_id, claim_id, attempt)
-)
-"""
 
 
 class PostgresAuthenticatedRecoveryService:
     """Verify and atomically persist evidence + UNKNOWN transition.
 
-    Requires RECOVERY_RECEIPTS_DDL to be installed *explicitly* by an operator.
-    The optional schema is intentionally not part of the stable 0.8 schema or
-    the development v3 migration history. Database errors propagate fail closed.
+    Requires a schema v4 database initialized by initialize_postgres_schema().
+    Database errors propagate fail closed.
     """
 
     def __init__(self, pool, verifier: RecoveryEvidenceVerifier) -> None:
@@ -43,7 +26,7 @@ class PostgresAuthenticatedRecoveryService:
 
     @staticmethod
     def initialize(pool) -> None:
-        """Create the D2 opt-in receipts table on an already initialized DB."""
+        """Backward-compatible idempotent initializer; prefer schema v4 migrations."""
         with pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(RECOVERY_RECEIPTS_DDL)

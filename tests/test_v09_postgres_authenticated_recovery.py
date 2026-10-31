@@ -36,7 +36,6 @@ def prepared():
     pool = create_postgres_pool(DSN, min_size=1, max_size=8)
     try:
         initialize_postgres_schema(pool)
-        PostgresAuthenticatedRecoveryService.initialize(pool)
         with pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("TRUNCATE ruhusa_recovery_receipts, ruhusa_executions")
