@@ -185,9 +185,10 @@ jobs:
                       ORDER BY migration_id
                       """
                   )
-                  rows = cur.fetchall()
-                  assert rows == [(1, 2), (2, 3), (3, 4)], (
-                      f"Expected 3 migration rows, got {rows!r}"
+                  actual_history = cur.fetchall()
+                  expected_history = [(1, 2), (2, 3), (3, 4)]
+                  assert actual_history == expected_history, (
+                      f"Expected {expected_history!r}, got {actual_history!r}"
                   )
 
           pool.close()

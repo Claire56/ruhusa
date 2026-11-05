@@ -78,7 +78,7 @@ from published v0.7.0 PostgreSQL state. See the
 - MCP authorization integration, separate from the security core.
 - Durable, operation-bound human approval evidence (v0.9-A development;
   [approval security model](docs/architecture/approvals.md)).
-- Authenticated recovery evidence: [v0.9-D1 signed-receipt prototype](docs/security/authenticated-recovery.md) (unreleased; distributed integration pending).
+- Authenticated recovery evidence: [v0.9-D1 signed receipts and opt-in D2 PostgreSQL transaction](docs/security/authenticated-recovery.md) (unreleased; migration and legacy API access hardening pending).
 - Compatibility, concurrency, and failure-path testing before release.
 
 **Do not assume `REQUIRE_APPROVAL` alone is a complete authenticated human
