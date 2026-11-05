@@ -117,3 +117,16 @@ def test_confirmed_effect_not_retryable(prepared):
     evidence = make_unknown(store, outcome=ExecutionRecoveryOutcome.SIDE_EFFECT_CONFIRMED)
     assert service.reconcile(evidence, now=NOW + timedelta(seconds=3))
     assert store.get(evidence.invocation_id).state is ExecutionState.COMPLETED
+
+
+def test_postgres_raw_reconciliation_is_disabled_by_default(prepared):
+    _, store, _ = prepared
+    evidence = make_unknown(store, invocation="raw-bypass")
+    with pytest.raises(PermissionError, match="Unsigned reconciliation is disabled"):
+        store.reconcile_unknown(
+            evidence.invocation_id,
+            outcome=ExecutionRecoveryOutcome.SIDE_EFFECT_NOT_APPLIED,
+            reason="unverified assertion",
+            now=NOW + timedelta(seconds=3),
+        )
+    assert store.get(evidence.invocation_id).state is ExecutionState.UNKNOWN

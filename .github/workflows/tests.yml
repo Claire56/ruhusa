@@ -93,15 +93,11 @@ jobs:
       - name: Sync project with PostgreSQL support
         run: uv sync --locked --extra postgres
 
-      - name: Run PostgreSQL integration tests
-        run: >-
-          uv run pytest
-          tests/test_postgres_migrations_v3.py
-          tests/test_postgres_approvals.py
-          tests/test_postgres_stores.py
-          tests/test_postgres_execution_store.py
-          tests/test_postgres_audit.py
-          tests/test_postgres_schema_compatibility.py
+      - name: Run full PostgreSQL-enabled test suite
+        env:
+          RUHUSA_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/ruhusa_test
+        run: |
+          uv run --extra postgres pytest -v -rs --tb=short
 
       - name: Build package
         run: uv build

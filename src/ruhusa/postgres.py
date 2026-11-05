@@ -885,7 +885,12 @@ class PostgresExecutionStore:
     mutate a newer execution attempt.
     """
 
-    def __init__(self, pool: ConnectionPool) -> None:
+    def __init__(
+        self, pool: ConnectionPool, *, allow_unsafe_legacy_reconciliation: bool = False
+    ) -> None:
+        # Default-deny raw UNKNOWN transitions. PostgreSQL authenticated
+        # recovery must use PostgresAuthenticatedRecoveryService instead.
+        self._allow_unsafe_legacy_reconciliation = allow_unsafe_legacy_reconciliation
         self._pool = pool
 
     def get(self, invocation_id: str) -> ExecutionRecord | None:
@@ -1196,6 +1201,12 @@ class PostgresExecutionStore:
         reason: str,
         now: datetime | None = None,
     ) -> bool:
+        if not self._allow_unsafe_legacy_reconciliation:
+            raise PermissionError(
+                "Unsigned reconciliation is disabled; use "
+                "PostgresAuthenticatedRecoveryService or explicitly enable "
+                "unsafe legacy mode"
+            )
         reason = reason.strip()
 
         if not reason:

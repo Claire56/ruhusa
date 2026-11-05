@@ -1,6 +1,6 @@
 # Authenticated recovery evidence (v0.9-D development)
 
-**Development status:** D1 signed-evidence prototype plus opt-in D2 PostgreSQL atomic recovery adapter. Neither is a v0.9 release or complete production recovery enforcement.
+**Development status:** D1 signed-evidence prototype plus D2 PostgreSQL atomic recovery adapter and D3 default-deny legacy entrypoints. Neither is a v0.9 release or complete production recovery enforcement.
 
 An `UNKNOWN` execution MUST NOT become retryable merely because an agent reports that a side effect did not happen. The v0.9-D1 `AuthenticatedRecoveryService` accepts a cryptographically authenticated reconciliation receipt only if:
 
@@ -16,6 +16,7 @@ An `UNKNOWN` execution MUST NOT become retryable merely because an agent reports
 
 ```python
 from datetime import UTC, datetime
+from ruhusa.execution import InMemoryExecutionStore
 from ruhusa.recovery_evidence import (
     AuthenticatedRecoveryService,
     RecoveryEvidenceVerifier,
@@ -24,6 +25,10 @@ from ruhusa.recovery_evidence import (
 
 # Server-only: load a 32+ byte secret from a secret manager, not source control.
 verifier = RecoveryEvidenceVerifier({("trusted-reconciler", "key-2026-10"): signing_key})
+# For in-memory research only: explicitly enable the deprecated raw store
+# transition required by this process-local prototype.
+# Do not expose the resulting store to untrusted callers.
+execution_store = InMemoryExecutionStore(allow_unsafe_legacy_reconciliation=True)
 service = AuthenticatedRecoveryService(
     execution_store, verifier, InMemoryRecoveryEvidenceReplayStore()
 )
@@ -35,7 +40,7 @@ accepted = service.reconcile(receipt, now=datetime.now(UTC))
 
 ## Important limits and production gates
 
-1. The legacy `ExecutionStore.reconcile_unknown()` and `ExecutionController.reconcile_unknown()` remain available for compatibility and **bypass signature validation**. Deployments must protect these trusted internal APIs; the D1 service is not mandatory enforcement at every call site.
+1. Legacy `ExecutionStore.reconcile_unknown()` and `ExecutionController.reconcile_unknown()` are denied by default in the built-in stores. The explicit `allow_unsafe_legacy_reconciliation=True` switch restores unsigned transitions for legacy experiments and is NOT an authorization boundary. Never enable it in untrusted application runtimes.
 2. The in-memory evidence-ID registry is **process-local**. For multiple replicas or restarts, implement a durable shared registry with atomic uniqueness, preferably inside the same database transaction as the execution state transition. D1 does not provide that atomic cross-store guarantee.
 3. HMAC key compromise allows evidence forgery. Provision/rotate signing keys through trusted identity and secrets infrastructure; do not embed them in agent prompts or logs.
 4. A valid receipt is only as truthful as its issuer. An external transaction lookup or signed provider outcome must substantiate the result; D1 does not itself validate external payments or tool side effects.
@@ -92,8 +97,31 @@ Set `RUHUSA_TEST_POSTGRES_DSN` first. Without this setting, tests skip. No
 claims about concurrency or recovery transactions are established by skipped tests.
 
 **Still pending before v0.9 release:** full fresh/upgrade migration validation,
-PostgreSQL CI verification, restricted privileged recovery
-entrypoints (including legacy APIs), issuer-key lifecycle/revocation, audit
+PostgreSQL CI verification, enforcing database-role separation and closing
+any remaining privileged recovery integration paths, issuer-key lifecycle/revocation, audit
 integration, operational evidence retention, external outcome provenance and
 crash/restart fault injection. Authentication proves who signed a claim, not
 whether a provider's reported outcome was truthful.
+
+## v0.9 legacy recovery lockdown
+
+`InMemoryExecutionStore` and `PostgresExecutionStore` now **deny** direct
+`reconcile_unknown()` by default (`PermissionError`). Production PostgreSQL
+reconciliation should occur through `PostgresAuthenticatedRecoveryService`,
+which verifies signed evidence and commits the replay receipt and state
+transition in one database transaction. The in-memory evidence service is only
+suitable for process-local research use.
+
+An explicit `allow_unsafe_legacy_reconciliation=True` constructor option exists
+solely to keep pre-v0.9 tests and staged migration workflows operable. This
+option **disables the evidence gate** and must not be enabled for stores exposed
+to agents, MCP handlers or API clients. Do not treat this opt-in as a security
+boundary: any actor with unrestricted application execution or database write
+permissions can bypass library checks. Protect the trusted recovery process
+and signing keys using separate identities, network/API authorization and
+least-privilege PostgreSQL roles; raw `UPDATE` rights on `ruhusa_executions`
+are equivalent to recovery authority.
+
+This change is deliberately a behavior change: applications invoking raw
+reconciliation will now fail closed until explicitly migrated to authenticated
+recovery.
