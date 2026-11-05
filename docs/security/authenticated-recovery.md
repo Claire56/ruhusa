@@ -28,9 +28,7 @@ verifier = RecoveryEvidenceVerifier({("trusted-reconciler", "key-2026-10"): sign
 # For in-memory research only: explicitly enable the deprecated raw store
 # transition required by this process-local prototype.
 # Do not expose the resulting store to untrusted callers.
-execution_store = InMemoryExecutionStore(
-    allow_unsafe_legacy_reconciliation=True
-)
+execution_store = InMemoryExecutionStore(allow_unsafe_legacy_reconciliation=True)
 service = AuthenticatedRecoveryService(
     execution_store, verifier, InMemoryRecoveryEvidenceReplayStore()
 )
