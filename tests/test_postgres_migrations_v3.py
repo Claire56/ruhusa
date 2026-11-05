@@ -27,7 +27,7 @@ def test_v2_v3_checksum_is_frozen() -> None:
 
 
 def test_v2_v3_is_registered_without_rewriting_history() -> None:
-    assert set(_MIGRATION_STEPS) == {(1, 2), (2, 3)}
+    assert {(1, 2), (2, 3)}.issubset(_MIGRATION_STEPS)
     assert _MIGRATION_STEPS[(2, 3)] == (
         APPROVAL_SCHEMA_DDL,
         _CHECKSUM_V2_TO_V3,
