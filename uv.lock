@@ -322,7 +322,7 @@ wheels = [
 
 [[package]]
 name = "ruhusa"
-version = "0.8.0"
+version = "0.9.0rc1"
 source = { editable = "." }
 
 [package.optional-dependencies]

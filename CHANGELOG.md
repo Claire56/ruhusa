@@ -4,6 +4,34 @@ All notable changes to Ruhusa are documented here.
 
 Ruhusa follows semantic versioning while the public API remains pre-1.0.
 
+## [0.9.0rc1] — release candidate (not published)
+
+### Added
+- Durable operation-bound approvals backed by PostgreSQL schema v3.
+- Stateful and live-model authorization attack benchmarks, with simulated
+  external effects and explicitly limited generalizability.
+- Transport-neutral MCP authorization guard, SDK tool router, and optional
+  real client/server protocol test.
+- Authenticated recovery receipts, transactional PostgreSQL reconciliation,
+  schema v4 migrations, and D3c process/rollback/concurrency integration tests.
+
+### Changed
+- Built-in direct `reconcile_unknown()` calls are denied by default. Trusted
+  PostgreSQL recovery should use `PostgresAuthenticatedRecoveryService`.
+  `allow_unsafe_legacy_reconciliation=True` weakens this boundary and is
+  intended only for explicitly isolated compatibility/testing scenarios.
+- Python package candidate version becomes `0.9.0rc1`; stable published v0.8.0
+  remains unchanged.
+
+### Security and limitations
+- No atomic commit spanning external side effects and the Ruhusa database.
+- Recovery evidence authenticity does not establish external outcome truth.
+- Trusted host identity, signing key lifecycle, database privileges, and
+  production transport authentication remain deployment responsibilities.
+- Crash/restart tests do not cover every failure injection or network partition.
+
+See [candidate release notes](docs/releases/v0.9.0rc1.md).
+
 ## [Unreleased] — v0.9 development
 
 Development work is not yet part of a published Ruhusa release.

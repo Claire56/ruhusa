@@ -57,14 +57,12 @@ action may proceed.
 | Track | Status |
 | --- | --- |
 | Latest published stable package | **v0.8.0** |
-| Next package release | **v0.9.0 — under development, not published** |
+| Next package release | **v0.9.0rc1 — release candidate, not stable** |
 | Stable PostgreSQL schema | **v2** (v0.8.0) |
-| Development PostgreSQL schema | **v3 in unreleased development source** (durable approvals; not stable) |
+| Development PostgreSQL schema | **v4 in unreleased release-candidate source** (approvals and authenticated recovery) |
 | Stability | Pre-1.0: APIs and guarantees can change |
 
-**For stable installations, use `ruhusa==0.8.0`.** The checked-out repository may contain unreleased v0.9 code even while
-package metadata remains `0.8.0`; a source checkout is not equivalent to
-the published v0.8.0 wheel.
+**For stable installations, use `ruhusa==0.8.0`.** The v0.9 release-candidate checkout is not equivalent to the published v0.8.0 wheel.
 
 v0.8.0 adds schema migrations and migration-history integrity checks,
 production health/observability support, and tested upgrade compatibility
@@ -78,7 +76,7 @@ from published v0.7.0 PostgreSQL state. See the
 - MCP authorization integration, separate from the security core.
 - Durable, operation-bound human approval evidence (v0.9-A development;
   [approval security model](docs/architecture/approvals.md)).
-- Authenticated recovery evidence: [v0.9-D1 signed receipts and opt-in D2 PostgreSQL transaction](docs/security/authenticated-recovery.md) (unreleased; migration and legacy API access hardening pending).
+- Authenticated recovery evidence: [v0.9-D1 signed receipts and opt-in D2 PostgreSQL transaction](docs/security/authenticated-recovery.md) (unreleased; schema v4 and default-deny legacy recovery implemented, with final validation pending).
 - Compatibility, concurrency, and failure-path testing before release.
 
 **Do not assume `REQUIRE_APPROVAL` alone is a complete authenticated human
@@ -89,6 +87,11 @@ responsibility unless explicitly verified by trusted infrastructure.
 The v0.9 roadmap combines implemented development prototypes with pending
 release gates; none of these prototypes is a stable v0.9 release.
 See [v0.9 development status](docs/development/v0.9-status.md).
+
+**For prerelease evaluation:** See the [v0.9.0rc1 release notes](docs/releases/v0.9.0rc1.md)
+and [v0.9 release checklist](docs/production/release-checklist-v0.9.md).
+The candidate must pass GitHub Actions and independent package/upgrade tests
+before publication. Existing stable users should remain on v0.8.0.
 
 ### Run the v0.9-B model-driven benchmark (development checkout)
 

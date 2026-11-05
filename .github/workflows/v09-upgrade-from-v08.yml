@@ -1,0 +1,76 @@
+name: v0.9 candidate upgrade from published v0.8
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade-v08-v09:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ruhusa_upgrade_v08
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ruhusa_upgrade_v08"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      UPGRADE_DSN: postgresql://postgres:postgres@localhost:5432/ruhusa_upgrade_v08
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv python install 3.12
+      - name: Initialize database with real published 0.8.0 wheel
+        run: |
+          uv venv --python 3.12 /tmp/ruhusa-stable
+          uv pip install --python /tmp/ruhusa-stable/bin/python 'ruhusa[postgres]==0.8.0'
+          /tmp/ruhusa-stable/bin/python - <<'PY'
+          import os
+          from importlib.metadata import version
+          from ruhusa.postgres import create_postgres_pool, initialize_postgres_schema
+
+          assert version('ruhusa') == '0.8.0'
+          pool = create_postgres_pool(os.environ['UPGRADE_DSN'], min_size=1, max_size=2)
+          initialize_postgres_schema(pool)
+          with pool.connection() as conn:
+              with conn.cursor() as cur:
+                  cur.execute('SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE')
+                  assert cur.fetchone() == (2,)
+          pool.close()
+          PY
+      - name: Build candidate wheel and upgrade schema v2 to v4
+        run: |
+          uv build
+          uv venv --python 3.12 /tmp/ruhusa-candidate
+          uv pip install --python /tmp/ruhusa-candidate/bin/python 'dist/ruhusa-0.9.0rc1-py3-none-any.whl[postgres]'
+          /tmp/ruhusa-candidate/bin/python - <<'PY'
+          import os
+          from importlib.metadata import version
+          from ruhusa.postgres import create_postgres_pool, initialize_postgres_schema
+
+          assert version('ruhusa') == '0.9.0rc1'
+          pool = create_postgres_pool(os.environ['UPGRADE_DSN'], min_size=1, max_size=2)
+          initialize_postgres_schema(pool)
+          initialize_postgres_schema(pool)  # idempotent second startup
+          with pool.connection() as conn:
+              with conn.cursor() as cur:
+                  cur.execute('SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE')
+                  assert cur.fetchone() == (4,)
+                  cur.execute('SELECT version_from,version_to FROM ruhusa_schema_migrations ORDER BY migration_id')
+                  history = cur.fetchall()
+                  assert history == [(2, 3), (3, 4)], history
+                  cur.execute("SELECT to_regclass('public.ruhusa_recovery_receipts')")
+                  assert cur.fetchone()[0] is not None
+          pool.close()
+          PY

@@ -5,8 +5,8 @@ from importlib.metadata import version
 import ruhusa
 
 
-def test_distribution_version_is_v080() -> None:
-    assert version("ruhusa") == "0.8.0"
+def test_distribution_version_is_v09rc1() -> None:
+    assert version("ruhusa") == "0.9.0rc1"
 
 
 def test_every_declared_root_export_resolves() -> None:
