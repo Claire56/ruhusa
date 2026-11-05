@@ -29,6 +29,7 @@ from .models import (
 )
 from .postgres_approvals import PostgresApprovalStore as PostgresApprovalStore
 from .postgres_migrations import APPROVAL_SCHEMA_DDL as _APPROVAL_SCHEMA_DDL
+from .postgres_migrations import RECOVERY_RECEIPTS_SCHEMA_DDL as _RECOVERY_RECEIPTS_SCHEMA_DDL
 from .postgres_migrations import (
     acquire_migration_lock,
     run_migrations,
@@ -37,7 +38,7 @@ from .postgres_migrations import (
 from .revocation import RevocationRecord
 from .tools import ToolRegistration
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA_METADATA_STATEMENT = """
 CREATE TABLE IF NOT EXISTS ruhusa_schema_metadata (
@@ -196,7 +197,7 @@ _SCHEMA_STATEMENTS = (
 
 # v0.9-A: fresh schema-v3 databases must contain the same durable
 # approval table created by the v2→v3 migration.
-_SCHEMA_STATEMENTS = (*_SCHEMA_STATEMENTS, _APPROVAL_SCHEMA_DDL)
+_SCHEMA_STATEMENTS = (*_SCHEMA_STATEMENTS, _APPROVAL_SCHEMA_DDL, _RECOVERY_RECEIPTS_SCHEMA_DDL)
 
 
 def create_postgres_pool(
@@ -884,7 +885,12 @@ class PostgresExecutionStore:
     mutate a newer execution attempt.
     """
 
-    def __init__(self, pool: ConnectionPool) -> None:
+    def __init__(
+        self, pool: ConnectionPool, *, allow_unsafe_legacy_reconciliation: bool = False
+    ) -> None:
+        # Default-deny raw UNKNOWN transitions. PostgreSQL authenticated
+        # recovery must use PostgresAuthenticatedRecoveryService instead.
+        self._allow_unsafe_legacy_reconciliation = allow_unsafe_legacy_reconciliation
         self._pool = pool
 
     def get(self, invocation_id: str) -> ExecutionRecord | None:
@@ -1195,6 +1201,12 @@ class PostgresExecutionStore:
         reason: str,
         now: datetime | None = None,
     ) -> bool:
+        if not self._allow_unsafe_legacy_reconciliation:
+            raise PermissionError(
+                "Unsigned reconciliation is disabled; use "
+                "PostgresAuthenticatedRecoveryService or explicitly enable "
+                "unsafe legacy mode"
+            )
         reason = reason.strip()
 
         if not reason:

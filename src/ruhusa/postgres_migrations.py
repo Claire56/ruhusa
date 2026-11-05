@@ -47,12 +47,34 @@ _MIGRATION_V2_TO_V3 = APPROVAL_SCHEMA_DDL
 # Hardcoded SHA-256 of _MIGRATION_V2_TO_V3.
 _CHECKSUM_V2_TO_V3 = "be0a98f0642f61253c736d63261063c853a1bd998f0bac55ac470f0c210dc605"
 
+# v3→v4 adds durable, one-use authenticated recovery receipts.
+# Frozen migration SQL is independent of runtime initialization.
+RECOVERY_RECEIPTS_SCHEMA_DDL = """
+CREATE TABLE IF NOT EXISTS ruhusa_recovery_receipts (
+    evidence_id TEXT PRIMARY KEY,
+    invocation_id TEXT NOT NULL REFERENCES ruhusa_executions(invocation_id),
+    claim_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL CHECK (attempt > 0),
+    issuer TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (
+        outcome IN ('side_effect_confirmed', 'side_effect_not_applied')
+    ),
+    signature TEXT NOT NULL,
+    reconciled_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (invocation_id, claim_id, attempt)
+)
+"""
+_MIGRATION_V3_TO_V4 = RECOVERY_RECEIPTS_SCHEMA_DDL
+_CHECKSUM_V3_TO_V4 = "e8cb2d2c19e98a0194ac318907108eec89eed87ba8d4c601c45c6cd613918f76"
+
 # Registry of available migration steps: (from_version, to_version) maps to
 # (sql, expected_checksum). Each step is atomic within the caller's
 # transaction.
 _MIGRATION_STEPS: dict[tuple[int, int], tuple[str, str]] = {
     (1, 2): (_MIGRATION_V1_TO_V2, _CHECKSUM_V1_TO_V2),
     (2, 3): (_MIGRATION_V2_TO_V3, _CHECKSUM_V2_TO_V3),
+    (3, 4): (_MIGRATION_V3_TO_V4, _CHECKSUM_V3_TO_V4),
 }
 
 

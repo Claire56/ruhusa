@@ -42,7 +42,9 @@ def pool():
 
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE ruhusa_executions")
+            cur.execute(
+                "TRUNCATE TABLE ruhusa_recovery_receipts, ruhusa_executions RESTART IDENTITY"
+            )
 
     try:
         yield pool
@@ -65,7 +67,7 @@ def test_postgres_execution_store_satisfies_protocol(
     pool,
 ) -> None:
     assert isinstance(
-        PostgresExecutionStore(pool),
+        PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True),
         ExecutionStore,
     )
 
@@ -73,7 +75,7 @@ def test_postgres_execution_store_satisfies_protocol(
 def test_claim_creates_durable_claimed_record(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     now = _now()
 
     result = store.claim(
@@ -105,7 +107,7 @@ def test_concurrent_claim_has_exactly_one_winner(
 
     def attempt_claim(_: int):
         # Separate store instances deliberately share no Python lock.
-        store = PostgresExecutionStore(pool)
+        store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
         barrier.wait()
 
         return store.claim(
@@ -127,7 +129,7 @@ def test_concurrent_claim_has_exactly_one_winner(
     assert len(winners) == 1
     assert winners[0].permit is not None
 
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     record = store.get("inv-concurrent")
 
     assert record is not None
@@ -139,7 +141,7 @@ def test_concurrent_claim_has_exactly_one_winner(
 def test_expired_authority_cannot_be_claimed(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     now = _now()
 
     result = store.claim(
@@ -156,7 +158,7 @@ def test_expired_authority_cannot_be_claimed(
 def test_canonical_expiry_mismatch_denies(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     now = _now()
 
     first = store.claim(
@@ -185,7 +187,7 @@ def test_canonical_expiry_mismatch_denies(
 def test_stale_permit_cannot_complete_new_attempt(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     now = _now()
     expires_at = now + timedelta(hours=1)
 
@@ -237,7 +239,7 @@ def test_stale_permit_cannot_complete_new_attempt(
 def test_unknown_blocks_retry_until_reconciliation(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     now = _now()
     expires_at = now + timedelta(hours=1)
 
@@ -285,7 +287,7 @@ def test_unknown_blocks_retry_until_reconciliation(
 def test_confirmed_side_effect_becomes_terminal_completed(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     now = _now()
     expires_at = now + timedelta(hours=1)
 
@@ -327,7 +329,7 @@ def test_confirmed_side_effect_becomes_terminal_completed(
 def test_stale_claim_is_quarantined_as_unknown(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     now = _now()
 
     claimed = store.claim(
@@ -359,7 +361,7 @@ def test_stale_claim_is_quarantined_as_unknown(
 def test_concurrent_reconciliation_has_one_winner(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     now = _now()
 
     claimed = store.claim(
@@ -380,7 +382,7 @@ def test_concurrent_reconciliation_has_one_winner(
     def reconcile(
         outcome: ExecutionRecoveryOutcome,
     ) -> bool:
-        worker_store = PostgresExecutionStore(pool)
+        worker_store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
         barrier.wait()
 
         return worker_store.reconcile_unknown(
@@ -418,7 +420,7 @@ def test_concurrent_reconciliation_has_one_winner(
 def test_cancel_requires_current_permit(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
     now = _now()
 
     claim = store.claim(
@@ -450,7 +452,7 @@ def test_cancel_requires_current_permit(
 def test_database_failure_propagates(
     pool,
 ) -> None:
-    store = PostgresExecutionStore(pool)
+    store = PostgresExecutionStore(pool, allow_unsafe_legacy_reconciliation=True)
 
     pool.close()
 

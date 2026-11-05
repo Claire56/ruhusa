@@ -71,7 +71,9 @@ def test_context_propagates_and_resets() -> None:
 def test_execution_lifecycle_events() -> None:
     now = datetime(2026, 8, 29, 17, 0, tzinfo=UTC)
     sink = InMemoryTelemetrySink()
-    store = InstrumentedExecutionStore(InMemoryExecutionStore(), sink)
+    store = InstrumentedExecutionStore(
+        InMemoryExecutionStore(allow_unsafe_legacy_reconciliation=True), sink
+    )
     expiry = now + timedelta(minutes=5)
     claim = store.claim("inv-1", expires_at=expiry, now=now)
     assert claim.permit is not None
@@ -100,7 +102,7 @@ def test_telemetry_sink_failure_does_not_change_execution() -> None:
             raise RuntimeError("telemetry unavailable")
 
     now = datetime(2026, 8, 29, 17, 0, tzinfo=UTC)
-    result = InstrumentedExecutionStore(InMemoryExecutionStore(), BrokenSink()).claim(
-        "inv-1", expires_at=now + timedelta(minutes=5), now=now
-    )
+    result = InstrumentedExecutionStore(
+        InMemoryExecutionStore(allow_unsafe_legacy_reconciliation=True), BrokenSink()
+    ).claim("inv-1", expires_at=now + timedelta(minutes=5), now=now)
     assert result.allowed is True

@@ -137,7 +137,11 @@ class InMemoryExecutionStore:
     side effect, or exactly-once external side effects.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, allow_unsafe_legacy_reconciliation: bool = False) -> None:
+        # Legacy unsigned reconciliation is OFF by default. The opt-in exists
+        # only for research fixtures and staged migrations; never enable it for
+        # a store reachable by agents, tools or other untrusted callers.
+        self._allow_unsafe_legacy_reconciliation = allow_unsafe_legacy_reconciliation
         self._records: dict[str, ExecutionRecord] = {}
         self._lock = Lock()
 
@@ -355,6 +359,11 @@ class InMemoryExecutionStore:
         This method belongs to trusted reconciliation infrastructure. Agents
         must not be allowed to self-assert recovery outcomes.
         """
+        if not self._allow_unsafe_legacy_reconciliation:
+            raise PermissionError(
+                "Unsigned reconciliation is disabled; use an authenticated "
+                "recovery service or explicitly enable unsafe legacy mode"
+            )
         reason = reason.strip()
         if not reason:
             raise ValueError("recovery reason must not be empty")

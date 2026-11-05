@@ -20,7 +20,7 @@ KEY = b"trusted-reconciler-test-key-with-32-bytes-minimum"
 
 
 def setup(outcome=ExecutionRecoveryOutcome.SIDE_EFFECT_NOT_APPLIED):
-    store = InMemoryExecutionStore()
+    store = InMemoryExecutionStore(allow_unsafe_legacy_reconciliation=True)
     result = store.claim("inv-1", expires_at=NOW + timedelta(hours=1), now=NOW)
     assert result.permit is not None
     assert store.mark_unknown(result.permit, now=NOW + timedelta(seconds=1))

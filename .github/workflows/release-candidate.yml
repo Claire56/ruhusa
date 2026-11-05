@@ -173,7 +173,10 @@ jobs:
                   cur.execute(
                       "SELECT version FROM ruhusa_schema_metadata WHERE singleton = TRUE"
                   )
-                  assert cur.fetchone() == (3,)
+                  actual_version = cur.fetchone()
+                  assert actual_version == (4,), (
+                      f"Expected schema v4, got {actual_version!r}"
+                  )
 
                   cur.execute(
                       """
@@ -182,7 +185,10 @@ jobs:
                       ORDER BY migration_id
                       """
                   )
-                  assert cur.fetchall() == [(1, 2), (2, 3)]
+                  rows = cur.fetchall()
+                  assert rows == [(1, 2), (2, 3), (3, 4)], (
+                      f"Expected 3 migration rows, got {rows!r}"
+                  )
 
           pool.close()
           PY

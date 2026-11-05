@@ -32,7 +32,7 @@ INVOCATION_ID = "inv-recovery-001"
 def claimed_store(
     invocation_id: str = INVOCATION_ID,
 ) -> tuple[InMemoryExecutionStore, ExecutionPermit]:
-    store = InMemoryExecutionStore()
+    store = InMemoryExecutionStore(allow_unsafe_legacy_reconciliation=True)
     claim = store.claim(
         invocation_id,
         expires_at=EXPIRY,
