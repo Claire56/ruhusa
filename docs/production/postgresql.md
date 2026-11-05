@@ -2,7 +2,7 @@
 
 Ruhusa introduced optional PostgreSQL-backed implementations in v0.7.
 The published v0.8.0 package uses PostgreSQL schema v2 with migration
-history validation. The current development source targets schema v3 for durable approvals,
+history validation. The v0.9 release-candidate source targets schema v4 for durable approvals and recovery receipts,
 but it is not included in the published stable v0.8.0 distribution.
 
 ## Scope
