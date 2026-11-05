@@ -1,10 +1,10 @@
-# Ruhusa v0.9 release-candidate checklist
+# Ruhusa v0.9.0 release checklist
 
-**Candidate:** `0.9.0rc1` · **Stable on PyPI:** `0.8.0` until GA publication.
+**Release:** `0.9.0` · **Stable on PyPI:** `0.8.0` until publication.
 
 ## Version and packaging
 
-- [ ] `pyproject.toml`, `uv.lock`, `importlib.metadata.version`, wheel, sdist and CLI report `0.9.0rc1`.
+- [ ] `pyproject.toml`, `uv.lock`, `importlib.metadata.version`, wheel, sdist and CLI report `0.9.0`.
 - [ ] Run `uv lock` and `uv sync --locked --extra postgres --extra fastapi`.
 - [ ] Run `uv build`; install wheel and sdist in independent clean Python 3.12 virtual environments.
 - [ ] Verify base wheel does not require PostgreSQL/FastAPI packages; extras work in clean installs.
@@ -37,7 +37,6 @@
 
 ## Publication (not automatic)
 
-- [ ] Candidate approved and tagged `v0.9.0rc1` only after checks pass.
+- [ ] All CI checks pass on this branch before tagging.
 - [ ] Verify TestPyPI/PyPI publishing configuration, credentials and provenance.
-- [ ] For GA, change version to `0.9.0`, regenerate lock/artifacts, repeat all release checks.
-- [ ] Publish GitHub release notes and PyPI distribution; verify download/install.
+- [ ] Tag `v0.9.0`, publish GitHub release notes and PyPI distribution; verify download/install.
