@@ -4,6 +4,38 @@ All notable changes to Ruhusa are documented here.
 
 Ruhusa follows semantic versioning while the public API remains pre-1.0.
 
+## [0.9.0] — Final release
+
+Ruhusa v0.9.0 introduces durable approvals, MCP authorization integration, authenticated execution recovery, and expanded adversarial security validation.
+
+### Added
+
+- Durable, operation-bound human approvals backed by PostgreSQL.
+- Real-agent and stateful authorization attack benchmarks.
+- Framework-neutral MCP authorization guard and MCP SDK integration.
+- Signed authenticated recovery evidence and durable PostgreSQL recovery receipts.
+- PostgreSQL schema v4 and versioned recovery migrations.
+- Distributed recovery validation covering process restart, concurrency, transaction rollback, and abrupt process termination.
+
+### Security
+
+- Legacy unsigned `reconcile_unknown()` operations are denied by default in the built-in execution stores.
+- Authenticated PostgreSQL recovery validates signed evidence and transactionally persists recovery state.
+- Recovery replay protection and concurrent reconciliation behavior are covered by PostgreSQL integration tests.
+
+### Compatibility
+
+- PostgreSQL schema advances from v2 in v0.8.0 to v4 in v0.9.0.
+- Existing deployments must back up their databases and validate migrations before upgrading.
+- Applications using legacy unsigned recovery must migrate to authenticated recovery.
+- The unsafe legacy reconciliation option is intended only for isolated compatibility and research environments.
+
+### Validation
+
+Release qualification requires successful GitHub Actions checks, PostgreSQL integration tests, clean package installation, published-version upgrade validation, and MCP SDK integration verification.
+
+See [v0.9.0 release notes](docs/releases/v0.9.0.md).
+
 ## [0.9.0rc1] — release candidate (not published)
 
 ### Added

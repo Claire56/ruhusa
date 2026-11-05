@@ -57,12 +57,12 @@ action may proceed.
 | Track | Status |
 | --- | --- |
 | Latest published stable package | **v0.8.0** |
-| Next package release | **v0.9.0rc1 — release candidate, not stable** |
+| Next package release | **v0.9.0 — pending publication** |
 | Stable PostgreSQL schema | **v2** (v0.8.0) |
-| Development PostgreSQL schema | **v4 in unreleased release-candidate source** (approvals and authenticated recovery) |
+| Development PostgreSQL schema | **v4 in v0.9.0 source** (approvals and authenticated recovery) |
 | Stability | Pre-1.0: APIs and guarantees can change |
 
-**For stable installations, use `ruhusa==0.8.0`.** The v0.9 release-candidate checkout is not equivalent to the published v0.8.0 wheel.
+**For stable installations, use `ruhusa==0.8.0`.** The v0.9.0 source checkout is not equivalent to the published v0.8.0 wheel.
 
 v0.8.0 adds schema migrations and migration-history integrity checks,
 production health/observability support, and tested upgrade compatibility
@@ -88,10 +88,9 @@ The v0.9 roadmap combines implemented development prototypes with pending
 release gates; none of these prototypes is a stable v0.9 release.
 See [v0.9 development status](docs/development/v0.9-status.md).
 
-**For prerelease evaluation:** See the [v0.9.0rc1 release notes](docs/releases/v0.9.0rc1.md)
+See the [v0.9.0 release notes](docs/releases/v0.9.0.md)
 and [v0.9 release checklist](docs/production/release-checklist-v0.9.md).
-The candidate must pass GitHub Actions and independent package/upgrade tests
-before publication. Existing stable users should remain on v0.8.0.
+Existing stable users should upgrade using the published wheel once available on PyPI.
 
 ### Run the v0.9-B model-driven benchmark (development checkout)
 

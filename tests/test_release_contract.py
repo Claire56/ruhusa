@@ -6,7 +6,7 @@ import ruhusa
 
 
 def test_distribution_version_is_v09rc1() -> None:
-    assert version("ruhusa") == "0.9.0rc1"
+    assert version("ruhusa") == "0.9.0"
 
 
 def test_every_declared_root_export_resolves() -> None:

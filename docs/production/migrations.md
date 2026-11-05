@@ -72,18 +72,18 @@ checksum integrity, not broader tamper-evidence.
 | 1       | Ruhusa 0.7    | Initial production schema (grants, revocations, invocations, tools, audit, executions) |
 | 2       | Ruhusa 0.8    | Migration history tracking via `ruhusa_schema_migrations` |
 | 3       | v0.9 development (unreleased) | Durable approval schema |
-| 4       | v0.9 development (unreleased) | Authenticated recovery receipts and constraints |
+| 4       | v0.9.0 | Authenticated recovery receipts and constraints |
 
-## v0.9 release-candidate migrations
+## v0.9.0 migrations
 
-Published Ruhusa v0.8.0 targets schema **v2**. The `0.9.0rc1` candidate
+Published Ruhusa v0.8.0 targets schema **v2**. Ruhusa v0.9.0
 targets schema **v4**, applying registered `v2 → v3` (durable approvals)
 and `v3 → v4` (authenticated recovery receipts) migrations as needed.
 The historic `v1 → v2` migration is unchanged. Migration history checksums
 must never be rewritten to accommodate test failures.
 
 Run version-specific upgrade tests with **actual published wheels**, then
-install the local candidate wheel to upgrade the same database. Confirm the
+install the local v0.9.0 wheel to upgrade the same database. Confirm the
 schema reaches v4, that `ruhusa_schema_migrations` contains only the expected
 ordered steps, and that repeat initialization is idempotent. Migrate with a
 backup and maintenance plan; the framework does **not** support downgrade to

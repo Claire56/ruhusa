@@ -73,33 +73,33 @@ jobs:
 
       - name: Verify artifact names
         run: |
-          test -f dist/ruhusa-0.9.0rc1.tar.gz
-          test -f dist/ruhusa-0.9.0rc1-py3-none-any.whl
+          test -f dist/ruhusa-0.9.0.tar.gz
+          test -f dist/ruhusa-0.9.0-py3-none-any.whl
 
       - name: Smoke test base wheel without optional dependencies
         run: |
           python3.12 -m venv /tmp/ruhusa-base
           /tmp/ruhusa-base/bin/python -m pip install --upgrade pip
-          /tmp/ruhusa-base/bin/python -m pip install --no-deps dist/ruhusa-0.9.0rc1-py3-none-any.whl
+          /tmp/ruhusa-base/bin/python -m pip install --no-deps dist/ruhusa-0.9.0-py3-none-any.whl
           /tmp/ruhusa-base/bin/python - <<'PY'
           import importlib.util
           from importlib.metadata import version
           import ruhusa
 
-          assert version("ruhusa") == "0.9.0rc1"
+          assert version("ruhusa") == "0.9.0"
           assert importlib.util.find_spec("psycopg") is None
           assert importlib.util.find_spec("fastapi") is None
           for name in ruhusa.__all__:
               assert getattr(ruhusa, name) is not None
           PY
-          test "$(/tmp/ruhusa-base/bin/ruhusa version)" = "0.9.0rc1"
-          /tmp/ruhusa-base/bin/ruhusa doctor --json | /tmp/ruhusa-base/bin/python -c 'import json,sys; p=json.load(sys.stdin); assert p["ruhusa"]=="0.9.0rc1"; assert p["postgres_extra_available"] is False; assert p["fastapi_extra_available"] is False'
+          test "$(/tmp/ruhusa-base/bin/ruhusa version)" = "0.9.0"
+          /tmp/ruhusa-base/bin/ruhusa doctor --json | /tmp/ruhusa-base/bin/python -c 'import json,sys; p=json.load(sys.stdin); assert p["ruhusa"]=="0.9.0"; assert p["postgres_extra_available"] is False; assert p["fastapi_extra_available"] is False'
 
       - name: Smoke test wheel with PostgreSQL and FastAPI extras
         run: |
           python3.12 -m venv /tmp/ruhusa-extras
           /tmp/ruhusa-extras/bin/python -m pip install --upgrade pip
-          /tmp/ruhusa-extras/bin/python -m pip install 'dist/ruhusa-0.9.0rc1-py3-none-any.whl[postgres,fastapi]'
+          /tmp/ruhusa-extras/bin/python -m pip install 'dist/ruhusa-0.9.0-py3-none-any.whl[postgres,fastapi]'
           /tmp/ruhusa-extras/bin/python - <<'PY'
           from ruhusa.integrations.fastapi import FastAPITrustedInvocationAdapter
           from ruhusa.postgres import PostgresExecutionStore
@@ -162,14 +162,14 @@ jobs:
           pool.close()
           PY
 
-      - name: Build v0.9.0rc1 wheel
+      - name: Build v0.9.0 wheel
         run: uv build
 
-      - name: Upgrade the real v0.7.0 database with v0.9.0rc1
+      - name: Upgrade the real v0.7.0 database with v0.9.0
         run: |
           python3.12 -m venv /tmp/ruhusa-rc1
           /tmp/ruhusa-rc1/bin/python -m pip install --upgrade pip
-          /tmp/ruhusa-rc1/bin/python -m pip install 'dist/ruhusa-0.9.0rc1-py3-none-any.whl[postgres]'
+          /tmp/ruhusa-rc1/bin/python -m pip install 'dist/ruhusa-0.9.0-py3-none-any.whl[postgres]'
           /tmp/ruhusa-rc1/bin/python - <<'PY'
           import os
           from ruhusa.postgres import create_postgres_pool, initialize_postgres_schema
