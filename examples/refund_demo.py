@@ -68,6 +68,7 @@ request = AuthorizationRequest(
             grant_id="grant-user-supervisor",
             grantor_id="user-42",
             grantee_id="supervisor-agent",
+            task_id="task-001",
             scope=root_scope,
             issued_at=now,
             expires_at=now + timedelta(minutes=15),
@@ -76,11 +77,13 @@ request = AuthorizationRequest(
             grant_id="grant-supervisor-billing",
             grantor_id="supervisor-agent",
             grantee_id="billing-agent",
+            task_id="task-001",
             scope=billing_scope,
             issued_at=now,
             expires_at=now + timedelta(minutes=10),
         ),
     ),
+    invoking_principal_id="supervisor-agent",
 )
 
 decision = gate.authorize(request)
